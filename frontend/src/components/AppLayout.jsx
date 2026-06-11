@@ -37,13 +37,10 @@ export default function AppLayout({ children }) {
     return (
         <div className="flex min-h-screen bg-background text-foreground">
             <aside className="hidden md:flex w-64 shrink-0 flex-col border-r border-border bg-card">
-                <div className="h-16 flex items-center px-4 border-b border-border gap-3">
-                    <Link to="/dashboard" className="flex items-center gap-3" data-testid="brand-logo">
-                        <img src="/rsc-logo.png" alt="RSC" className="h-10 w-auto" />
-                        <div className="leading-tight">
-                            <div className="font-display font-bold text-sm">Royal Shades</div>
-                            <div className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase">Catalog Suite</div>
-                        </div>
+                <div className="h-16 flex items-center px-4 border-b border-border">
+                    <Link to="/dashboard" className="flex items-center w-full" data-testid="brand-logo">
+                        <img src="/rsc-logo.png" alt="Royal Shades And Curtains LLC Dubai"
+                             className="max-h-10 w-auto object-contain mx-auto" />
                     </Link>
                 </div>
                 <nav className="flex-1 overflow-y-auto py-4">
