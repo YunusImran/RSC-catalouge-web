@@ -3,7 +3,7 @@ import PageHeader from "../components/PageHeader";
 import { api } from "../lib/api";
 import StatusBadge from "../components/StatusBadge";
 import { Card } from "../components/ui/card";
-import { Boxes, ScanLine, ArrowUpRight, Truck, FolderTree, AlertTriangle, CheckCircle2, PackageOpen, Archive } from "lucide-react";
+import { Boxes, ScanLine, ArrowUpRight, Truck, FolderTree, AlertTriangle, CheckCircle2, PackageOpen, Archive, CalendarClock, CalendarDays } from "lucide-react";
 import {
     BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line,
     PieChart, Pie, Cell, CartesianGrid, Legend
@@ -36,18 +36,23 @@ export default function Dashboard() {
     return (
         <div>
             <PageHeader title="Operations Overview" subtitle="Dashboard" />
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mb-8">
-                <Metric label="Total Catalogs" value={t.total_catalogs} icon={Boxes} testId="stat-total" />
-                <Metric label="Available" value={t.available} icon={CheckCircle2} accent="text-[hsl(var(--success))]" testId="stat-available" />
-                <Metric label="Issued" value={t.issued} icon={ArrowUpRight} accent="text-primary" testId="stat-issued" />
+
+            {/* Lifecycle widgets row */}
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4 mb-4">
+                <Metric label="Total Issued" value={t.issued} icon={ArrowUpRight} accent="text-primary" testId="stat-total-issued" />
+                <Metric label="Due Today" value={t.due_today} icon={CalendarClock} accent="text-[hsl(var(--warning))]" testId="stat-due-today" />
+                <Metric label="Due This Week" value={t.due_week} icon={CalendarDays} accent="text-chart-5" testId="stat-due-week" />
+                <Metric label="Overdue" value={t.overdue} icon={AlertTriangle} accent="text-accent" testId="stat-overdue" />
                 <Metric label="Returned" value={t.returned} icon={PackageOpen} accent="text-chart-5" testId="stat-returned" />
-                <Metric label="Archived" value={t.archived} icon={Archive} testId="stat-archived" />
-                <Metric label="Suppliers" value={t.suppliers} icon={Truck} testId="stat-suppliers" />
-                <Metric label="Categories" value={t.categories} icon={FolderTree} testId="stat-categories" />
-                <Metric label="Scans Today" value={t.scans_today} icon={ScanLine} testId="stat-scans-today" />
             </div>
 
-            {/* Charts */}
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-4 gap-4 mb-8">
+                <Metric label="Total Catalogs" value={t.total_catalogs} icon={Boxes} testId="stat-total" />
+                <Metric label="Available" value={t.available} icon={CheckCircle2} accent="text-[hsl(var(--success))]" testId="stat-available" />
+                <Metric label="Suppliers" value={t.suppliers} icon={Truck} testId="stat-suppliers" />
+                <Metric label="Categories" value={t.categories} icon={FolderTree} testId="stat-categories" />
+            </div>
+
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
                 <Card className="p-6 surface-card rounded-sm">
                     <div className="label-uppercase mb-4">Monthly · Issues vs Returns</div>
@@ -68,9 +73,7 @@ export default function Dashboard() {
                     <ResponsiveContainer width="100%" height={260}>
                         <PieChart>
                             <Pie data={charts?.category_distribution || []} dataKey="value" nameKey="name" outerRadius={90} label fontSize={11}>
-                                {(charts?.category_distribution || []).map((_, i) => (
-                                    <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                                ))}
+                                {(charts?.category_distribution || []).map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
                             </Pie>
                             <Tooltip contentStyle={{ background: "hsl(var(--card))", border: "1px solid hsl(var(--border))" }} />
                         </PieChart>
@@ -102,7 +105,6 @@ export default function Dashboard() {
                 </Card>
             </div>
 
-            {/* Lists */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <Card className="p-6 surface-card rounded-sm" data-testid="recently-added-list">
                     <div className="label-uppercase mb-3">Recently Added</div>
@@ -140,7 +142,7 @@ export default function Dashboard() {
                                 <div className="font-medium truncate">{o.catalog_name}</div>
                                 <div className="flex justify-between text-xs text-muted-foreground">
                                     <span className="font-mono">{o.catalog_code}</span>
-                                    <span className="text-accent">due {(o.expected_return_date || "").slice(0, 10)}</span>
+                                    <span className="text-accent font-semibold">{o.overdue_days}d overdue</span>
                                 </div>
                             </div>
                         ))}

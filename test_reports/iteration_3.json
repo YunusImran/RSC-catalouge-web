@@ -1,0 +1,47 @@
+{
+  "summary": "Iteration 3 — Royal Shades v2 major redesign verified end-to-end. Backend: 28/28 pytest PASS covering role rename (manager->supervisor) + migration check, /api/employees CRUD with RBAC, manual qr_value flow (no auto-gen), buying_price gating (admin-only) across GET /catalogs, GET /catalogs/{id} and POST /scans, PATCH catalog admin-only (403 for supervisor/staff), Excel bulk import template + import-with-errors flow, mobile validation on POST /issues (empty/12abc->400, +971...->200), overdue filter (is_overdue/overdue_days), returns RBAC (staff 403 on GET+POST), dashboard widgets (due_today/due_week/overdue), users admin-only, audit logs carry user_name+record_affected for new actions. Frontend smoke (admin + supervisor): Login page has /rsc-logo.png + 'Royal Shades And Curtains LLC' + 'Dubai · UAE'; dashboard renders all 5 new widgets (Total Issued, Due Today, Due This Week, Overdue, Returned); sidebar shows Employees for admin & supervisor and Users only for admin; Catalogs page shows Bulk Import (admin+supervisor) + Buying column (admin only); Bulk Import dialog has Download Template; Employees page loads; Issues page exposes all 4 filters (Active, Due Today, Due This Week, Overdue). 0 fatal JS errors during the run.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/auth/login", "issue": "Cookies still set with secure=False (carry-over from iter 2). Low priority hardening."},
+      {"endpoint": "GET /api/issues?filter=due_week", "issue": "Range $gte today $lte today+7d would also include overdue items if expected_return_date is in the past AND >= today fails — actual filter is correct, but due_today filter uses $regex on date prefix which works for ISO strings; brittle if non-ISO is stored."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Sidebar header (AppLayout)", "issue": "Brand wordmark 'Royal Shades & Curtains' appears truncated/clipped in the top-left to 'Roya/Shac.. CATA/SUI..' on 1920px viewport — likely a fixed-width container or overflow:hidden issue.", "selector": "sidebar header brand", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Sidebar header", "issues": ["Brand name visually clipped; needs wider container or truncate ellipsis with full text in title attribute."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_rsc_v2.py",
+    "/app/backend/tests/test_fabric_catalog.py",
+    "/app/test_reports/pytest/pytest_v2.xml"
+  ],
+  "action_items": [
+    "Fix sidebar brand truncation so the company name is readable in the top-left.",
+    "(Optional, carry-over) Harden auth cookies with secure=True over HTTPS."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now ~1190 lines — getting unwieldy. Recommend splitting into modules (auth.py, catalogs.py, employees.py, reports.py, dashboard.py, scans.py) before next big feature.",
+    "Bulk import auto-creates categories/suppliers from row values silently — consider logging this as an audit entry and surfacing in the import report (currently only count of imported/failed is shown).",
+    "POST /catalogs/import accepts any file with .xlsx open — validate Content-Type and file size; large XLSX would currently buffer entirely in memory.",
+    "issues filter 'due_week' includes today but does not exclude already-overdue items; semantics may differ from UI label.",
+    "Mobile validation regex MOBILE_RE allows mixed +-/()/spaces but pure-alpha 'abc' is rejected (good). Consider normalizing on save (strip spaces) for downstream search."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_rsc_v2.py",
+    "/app/test_reports/iteration_3.json",
+    "/app/test_reports/pytest/pytest_v2.xml"
+  ],
+  "success_rate": {"backend": "100% (28/28 in test_rsc_v2.py)", "frontend": "100% smoke (login branding, dashboard widgets, sidebar RBAC for admin+supervisor, catalogs bulk import dialog, employees CRUD page, issues filters)"},
+  "test_credentials": "Admin: admin@fabriccatalog.com / Admin@123; Supervisor: supervisor1@test.com / Sup@1234 (auto-created); Staff: staff1@test.com / Stf@1234 (auto-created).",
+  "seed_data_creation": "Tests create TEST_Emp1 employee (then deactivated), RSC-* catalogs, IMP-* catalogs via bulk import, ISS-* and NOQR-* catalogs. All under unique timestamps to avoid collisions on re-runs.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "v2 backend at 100% (28/28). Two regression suites exist: test_fabric_catalog.py (legacy auth/reports) and test_rsc_v2.py (v2 features). Frontend smoke clean except sidebar brand truncation (low priority). Existing legacy catalog FC-001 still in DB (status=Returned). Bulk import auto-creates referenced category/supplier on the fly.",
+  "rca_of_the_issue": "N/A — all targeted v2 features verified. The only failure during initial run was a too-strict audit-log assertion on legacy entries (pre-v2 records lacked record_affected); the test was relaxed to validate only new actions (catalog_import, employee_created) — the code itself is correct."
+}

@@ -11,6 +11,7 @@ import Catalogs from "./pages/Catalogs";
 import CatalogDetail from "./pages/CatalogDetail";
 import Categories from "./pages/Categories";
 import Suppliers from "./pages/Suppliers";
+import Employees from "./pages/Employees";
 import Scanner from "./pages/Scanner";
 import IssuesReturns from "./pages/IssuesReturns";
 import Reports from "./pages/Reports";
@@ -24,7 +25,7 @@ function Protected({ children, roles }) {
         return <div className="min-h-screen grid place-items-center text-muted-foreground">Checking session…</div>;
     }
     if (!user) return <Navigate to="/login" replace />;
-    if (roles && !can(user, ...roles)) return <Navigate to="/" replace />;
+    if (roles && !can(user, ...roles)) return <Navigate to="/dashboard" replace />;
     return <AppLayout>{children}</AppLayout>;
 }
 
@@ -38,15 +39,16 @@ function Shell() {
             <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
             <Route path="/catalogs" element={<Protected><Catalogs /></Protected>} />
             <Route path="/catalogs/:id" element={<Protected><CatalogDetail /></Protected>} />
-            <Route path="/categories" element={<Protected roles={["admin", "manager"]}><Categories /></Protected>} />
-            <Route path="/suppliers" element={<Protected roles={["admin", "manager"]}><Suppliers /></Protected>} />
+            <Route path="/categories" element={<Protected roles={["admin", "supervisor"]}><Categories /></Protected>} />
+            <Route path="/suppliers" element={<Protected roles={["admin", "supervisor"]}><Suppliers /></Protected>} />
+            <Route path="/employees" element={<Protected roles={["admin", "supervisor"]}><Employees /></Protected>} />
             <Route path="/scanner" element={<Protected><Scanner /></Protected>} />
             <Route path="/issues-returns" element={<Protected><IssuesReturns /></Protected>} />
-            <Route path="/reports" element={<Protected roles={["admin", "manager"]}><Reports /></Protected>} />
-            <Route path="/audit-logs" element={<Protected roles={["admin", "manager"]}><AuditLogs /></Protected>} />
+            <Route path="/reports" element={<Protected roles={["admin", "supervisor"]}><Reports /></Protected>} />
+            <Route path="/audit-logs" element={<Protected roles={["admin", "supervisor"]}><AuditLogs /></Protected>} />
             <Route path="/users" element={<Protected roles={["admin"]}><Users /></Protected>} />
             <Route path="/change-password" element={<Protected><ChangePassword /></Protected>} />
-            <Route path="*" element={<Navigate to="/" replace />} />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
         </Routes>
     );
 }

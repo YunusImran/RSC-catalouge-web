@@ -21,47 +21,55 @@ export default function Login() {
     };
 
     return (
-        <div className="min-h-screen grid md:grid-cols-2">
+        <div className="min-h-screen grid md:grid-cols-5 bg-background">
             <div
-                className="hidden md:block relative bg-cover bg-center"
+                className="hidden md:flex md:col-span-3 relative bg-cover bg-center"
                 style={{
-                    backgroundImage: `linear-gradient(135deg, hsla(215, 50%, 25%, 0.85), hsla(15, 60%, 50%, 0.55)), url(https://images.unsplash.com/photo-1588610992315-5654831ceebd?crop=entropy&cs=srgb&fm=jpg&q=85)`,
+                    backgroundImage: `linear-gradient(135deg, hsla(215, 60%, 18%, 0.92), hsla(15, 60%, 45%, 0.55)), url(https://images.unsplash.com/photo-1565183997392-2f6f122e5912?crop=entropy&cs=srgb&fm=jpg&q=85)`,
                 }}
             >
                 <div className="absolute inset-0 p-12 flex flex-col justify-between text-white">
                     <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-white text-primary grid place-items-center font-display font-black">F</div>
-                        <div>
-                            <div className="font-display font-black text-xl tracking-tight leading-none">FABRIC</div>
-                            <div className="text-[11px] tracking-[0.25em] uppercase opacity-80">Catalog Suite</div>
-                        </div>
+                        <img src="/rsc-logo.png" alt="Royal Shades" className="h-12 w-auto bg-white/10 backdrop-blur p-2 rounded-sm" />
                     </div>
                     <div className="space-y-4 max-w-md">
-                        <div className="label-uppercase text-white/70">Enterprise · v1.0</div>
+                        <div className="label-uppercase text-white/70 tracking-widest">Enterprise · Dubai</div>
                         <h2 className="font-display font-black text-4xl leading-tight">
-                            Track every swatch.<br />Issue, return, repeat.
+                            Catalog operations<br />for soft furnishing excellence.
                         </h2>
                         <p className="text-white/80">
-                            Modern catalog operations for textile studios — barcoded swatches, complete history, zero data loss.
+                            Track every swatch book — issue, return, audit. Built for the showroom floor and the warehouse.
                         </p>
                     </div>
-                    <div className="font-mono text-xs opacity-60">CODE128 · QR · AUDIT · RBAC</div>
+                    <div className="flex items-center justify-between font-mono text-xs opacity-70">
+                        <span>CODE128 · QR · AUDIT · RBAC</span>
+                        <span>v2.0</span>
+                    </div>
                 </div>
             </div>
 
-            <div className="flex items-center justify-center p-8 bg-background">
+            <div className="md:col-span-2 flex items-center justify-center p-6 sm:p-10">
                 <form onSubmit={onSubmit} className="w-full max-w-sm space-y-6" data-testid="login-form">
-                    <div className="space-y-2">
-                        <div className="label-uppercase">Sign in</div>
-                        <h1 className="font-display font-black text-3xl">Welcome back</h1>
-                        <p className="text-sm text-muted-foreground">Use your enterprise email to continue.</p>
+                    <div className="text-center space-y-3">
+                        <img src="/rsc-logo.png" alt="Royal Shades And Curtains LLC Dubai"
+                             className="h-20 mx-auto" data-testid="company-logo" />
+                        <div className="space-y-0.5">
+                            <h1 className="font-display font-black text-xl tracking-tight" data-testid="company-name">
+                                Royal Shades And Curtains LLC
+                            </h1>
+                            <div className="text-xs tracking-[0.3em] uppercase text-muted-foreground">Dubai · UAE</div>
+                        </div>
                     </div>
-                    <div className="space-y-4">
+                    <div className="border-t border-border pt-6 space-y-4">
+                        <div>
+                            <div className="label-uppercase">Catalog Suite · Sign in</div>
+                            <p className="text-sm text-muted-foreground mt-1">Use your enterprise email to continue.</p>
+                        </div>
                         <div>
                             <Label htmlFor="email" className="label-uppercase">Email</Label>
                             <Input id="email" type="email" required value={email}
                                 onChange={(e) => setEmail(e.target.value)}
-                                placeholder="you@company.com"
+                                placeholder="you@royalshades.ae"
                                 data-testid="login-email-input"
                                 className="mt-1.5" />
                         </div>
@@ -72,16 +80,16 @@ export default function Login() {
                                 data-testid="login-password-input"
                                 className="mt-1.5" />
                         </div>
-                    </div>
-                    {error && <div className="text-sm text-destructive" data-testid="login-error">{error}</div>}
-                    <Button type="submit" disabled={loading} className="w-full" data-testid="login-submit-btn">
-                        {loading ? "Signing in…" : "Sign in"}
-                    </Button>
-                    <div className="flex justify-between text-sm">
-                        <Link to="/forgot-password" className="text-muted-foreground hover:text-foreground" data-testid="forgot-password-link">
-                            Forgot password?
-                        </Link>
-                        <span className="text-muted-foreground font-mono text-xs">v1.0.0</span>
+                        {error && <div className="text-sm text-destructive" data-testid="login-error">{error}</div>}
+                        <Button type="submit" disabled={loading} className="w-full" data-testid="login-submit-btn">
+                            {loading ? "Signing in…" : "Sign in"}
+                        </Button>
+                        <div className="flex justify-between text-sm">
+                            <Link to="/forgot-password" className="text-muted-foreground hover:text-foreground" data-testid="forgot-password-link">
+                                Forgot password?
+                            </Link>
+                            <span className="text-muted-foreground font-mono text-xs">© Royal Shades</span>
+                        </div>
                     </div>
                 </form>
             </div>

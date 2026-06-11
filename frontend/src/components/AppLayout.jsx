@@ -3,20 +3,22 @@ import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useAuth, can } from "../lib/auth";
 import {
     LayoutDashboard, Boxes, FolderTree, Truck, ScanLine,
-    ArrowLeftRight, FileBarChart, ShieldCheck, Users, LogOut, Sun, Moon, KeyRound
+    ArrowLeftRight, FileBarChart, ShieldCheck, Users, LogOut, Sun, Moon, KeyRound, UserSquare2
 } from "lucide-react";
 import { Button } from "./ui/button";
 
+// Nav definitions with explicit role gating
 const nav = [
-    { to: "/", label: "Dashboard", icon: LayoutDashboard, roles: ["admin", "manager", "staff"] },
-    { to: "/catalogs", label: "Catalogs", icon: Boxes, roles: ["admin", "manager", "staff"] },
-    { to: "/categories", label: "Categories", icon: FolderTree, roles: ["admin", "manager"] },
-    { to: "/suppliers", label: "Suppliers", icon: Truck, roles: ["admin", "manager"] },
-    { to: "/scanner", label: "Scanner", icon: ScanLine, roles: ["admin", "manager", "staff"] },
-    { to: "/issues-returns", label: "Issues / Returns", icon: ArrowLeftRight, roles: ["admin", "manager", "staff"] },
-    { to: "/reports", label: "Reports", icon: FileBarChart, roles: ["admin", "manager"] },
-    { to: "/audit-logs", label: "Audit Logs", icon: ShieldCheck, roles: ["admin", "manager"] },
-    { to: "/users", label: "Users", icon: Users, roles: ["admin"] },
+    { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: ["admin", "supervisor", "staff"] },
+    { to: "/catalogs", label: "Catalogs", icon: Boxes, roles: ["admin", "supervisor", "staff"] },
+    { to: "/categories", label: "Categories", icon: FolderTree, roles: ["admin", "supervisor"] },
+    { to: "/suppliers", label: "Suppliers", icon: Truck, roles: ["admin", "supervisor"] },
+    { to: "/employees", label: "Employees", icon: UserSquare2, roles: ["admin", "supervisor"] },
+    { to: "/scanner", label: "Scanner", icon: ScanLine, roles: ["admin", "supervisor", "staff"] },
+    { to: "/issues-returns", label: "Issues / Returns", icon: ArrowLeftRight, roles: ["admin", "supervisor", "staff"] },
+    { to: "/reports", label: "Reports", icon: FileBarChart, roles: ["admin", "supervisor"] },
+    { to: "/audit-logs", label: "Audit Logs", icon: ShieldCheck, roles: ["admin", "supervisor"] },
+    { to: "/users", label: "Users", icon: Users, roles: ["admin"] },     // Admin-only
 ];
 
 export default function AppLayout({ children }) {
@@ -35,13 +37,11 @@ export default function AppLayout({ children }) {
     return (
         <div className="flex min-h-screen bg-background text-foreground">
             <aside className="hidden md:flex w-64 shrink-0 flex-col border-r border-border bg-card">
-                <div className="h-16 flex items-center px-6 border-b border-border">
-                    <Link to="/" className="flex items-center gap-2" data-testid="brand-logo">
-                        <div className="w-8 h-8 bg-primary text-primary-foreground grid place-items-center font-display font-black">
-                            F
-                        </div>
-                        <div>
-                            <div className="font-display font-bold text-base leading-none">FABRIC</div>
+                <div className="h-16 flex items-center px-4 border-b border-border gap-3">
+                    <Link to="/dashboard" className="flex items-center gap-3" data-testid="brand-logo">
+                        <img src="/rsc-logo.png" alt="RSC" className="h-10 w-auto" />
+                        <div className="leading-tight">
+                            <div className="font-display font-bold text-sm">Royal Shades</div>
                             <div className="text-[10px] tracking-[0.2em] text-muted-foreground uppercase">Catalog Suite</div>
                         </div>
                     </Link>
@@ -53,7 +53,7 @@ export default function AppLayout({ children }) {
                             <NavLink
                                 key={n.to}
                                 to={n.to}
-                                end={n.to === "/"}
+                                end={n.to === "/dashboard"}
                                 data-testid={`nav-${n.label.toLowerCase().replace(/[^a-z]+/g, "-")}`}
                                 className={({ isActive }) =>
                                     `flex items-center gap-3 px-6 py-2.5 text-sm border-l-4 transition-colors ${
@@ -78,7 +78,7 @@ export default function AppLayout({ children }) {
 
             <main className="flex-1 flex flex-col min-w-0">
                 <header className="h-16 border-b border-border bg-card flex items-center justify-between px-4 md:px-8">
-                    <div className="text-xs label-uppercase">Enterprise · Inventory Operating System</div>
+                    <div className="text-xs label-uppercase">Royal Shades And Curtains LLC · Dubai</div>
                     <div className="flex items-center gap-2">
                         <Button variant="ghost" size="icon" onClick={toggleTheme} data-testid="theme-toggle">
                             {dark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}

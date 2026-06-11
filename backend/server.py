@@ -5,12 +5,12 @@ load_dotenv(ROOT_DIR / '.env')
 
 import os
 import io
+import re
 import csv
 import secrets
 import logging
-import base64
 from datetime import datetime, timezone, timedelta
-from typing import Optional, List, Literal
+from typing import Optional, Literal
 
 import bcrypt
 import jwt
@@ -18,41 +18,43 @@ import barcode as pybarcode
 from barcode.writer import SVGWriter
 import qrcode
 import qrcode.image.svg
-from openpyxl import Workbook
-from reportlab.lib.pagesizes import A4, letter
+from openpyxl import Workbook, load_workbook
+from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 
-from fastapi import FastAPI, APIRouter, Request, Response, HTTPException, Depends, Query
-from fastapi.responses import StreamingResponse, PlainTextResponse
-from pydantic import BaseModel, Field, EmailStr, ConfigDict
+from fastapi import FastAPI, APIRouter, Request, Response, HTTPException, Depends, UploadFile, File
+from pydantic import BaseModel, EmailStr
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 from bson import ObjectId
 
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Setup
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 JWT_ALGORITHM = "HS256"
-ACCESS_TTL_MIN = 60 * 8  # 8h for usability
+ACCESS_TTL_MIN = 60 * 8
 REFRESH_TTL_DAYS = 7
+ROLE_ADMIN, ROLE_SUPERVISOR, ROLE_STAFF = "admin", "supervisor", "staff"
+ALL_ROLES = (ROLE_ADMIN, ROLE_SUPERVISOR, ROLE_STAFF)
+MOBILE_RE = re.compile(r"^[+]?[0-9\-\s()]{7,20}$")
 
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-app = FastAPI(title="Fabric Catalog API")
+app = FastAPI(title="Royal Shades Catalog API")
 api = APIRouter(prefix="/api")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(name)s - %(message)s')
-log = logging.getLogger("fabric")
+log = logging.getLogger("rsc")
 
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Helpers
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 def now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -72,13 +74,14 @@ def get_jwt_secret() -> str:
     return os.environ["JWT_SECRET"]
 
 def create_access_token(user_id: str, email: str, role: str) -> str:
-    payload = {"sub": user_id, "email": email, "role": role,
-               "exp": now() + timedelta(minutes=ACCESS_TTL_MIN), "type": "access"}
-    return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
+    return jwt.encode(
+        {"sub": user_id, "email": email, "role": role,
+         "exp": now() + timedelta(minutes=ACCESS_TTL_MIN), "type": "access"},
+        get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 def create_refresh_token(user_id: str) -> str:
-    payload = {"sub": user_id, "exp": now() + timedelta(days=REFRESH_TTL_DAYS), "type": "refresh"}
-    return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
+    return jwt.encode({"sub": user_id, "exp": now() + timedelta(days=REFRESH_TTL_DAYS), "type": "refresh"},
+                      get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 def set_auth_cookies(response: Response, access: str, refresh: str):
     response.set_cookie("access_token", access, httponly=True, secure=False, samesite="lax",
@@ -90,7 +93,7 @@ def clear_auth_cookies(response: Response):
     response.delete_cookie("access_token", path="/")
     response.delete_cookie("refresh_token", path="/")
 
-def doc_to_json(doc: dict) -> dict:
+def doc_to_json(doc):
     if not doc:
         return doc
     doc = dict(doc)
@@ -103,12 +106,18 @@ def doc_to_json(doc: dict) -> dict:
             doc[k] = v.isoformat()
     return doc
 
+def strip_buying_price(catalog: dict, role: str) -> dict:
+    if role != ROLE_ADMIN and catalog:
+        catalog = dict(catalog)
+        catalog.pop("buying_price", None)
+    return catalog
+
 async def get_current_user(request: Request) -> dict:
     token = request.cookies.get("access_token")
     if not token:
-        auth_header = request.headers.get("Authorization", "")
-        if auth_header.startswith("Bearer "):
-            token = auth_header[7:]
+        auth = request.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            token = auth[7:]
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
@@ -135,17 +144,19 @@ def require_role(*roles: str):
         return user
     return checker
 
-async def audit(user: dict, action: str, description: str, request: Request = None):
-    ip = request.client.host if request and request.client else "n/a"
+async def audit(user, action, description, request=None, affected=""):
+    ip = (request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+          if request else "n/a") or (request.client.host if request and request.client else "n/a")
     await db.audit_logs.insert_one({
-        "user_id": user["id"], "user_email": user["email"], "action": action,
-        "description": description, "ip_address": ip, "created_at": iso(now())
+        "user_id": user["id"], "user_email": user["email"], "user_name": user.get("name", ""),
+        "action": action, "description": description, "record_affected": affected,
+        "ip_address": ip, "created_at": iso(now())
     })
 
 
-# -----------------------------------------------------------------------------
-# Pydantic Models (Inputs only - we return dicts)
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Schemas
+# ---------------------------------------------------------------------------
 class LoginIn(BaseModel):
     email: EmailStr
     password: str
@@ -154,7 +165,7 @@ class RegisterIn(BaseModel):
     email: EmailStr
     password: str
     name: str
-    role: Literal["admin", "manager", "staff"] = "staff"
+    role: Literal["admin", "supervisor", "staff"] = "staff"
 
 class ChangePasswordIn(BaseModel):
     old_password: str
@@ -180,6 +191,15 @@ class SupplierIn(BaseModel):
     gst_number: Optional[str] = ""
     notes: Optional[str] = ""
 
+class EmployeeIn(BaseModel):
+    name: str
+    employee_code: Optional[str] = ""
+    department: Optional[str] = ""
+    designation: Optional[str] = ""
+    mobile: Optional[str] = ""
+    email: Optional[str] = ""
+    is_active: bool = True
+
 class CatalogIn(BaseModel):
     catalog_code: str
     catalog_name: str
@@ -191,16 +211,21 @@ class CatalogIn(BaseModel):
     color: Optional[str] = ""
     total_swatches: Optional[int] = 0
     description: Optional[str] = ""
-    catalog_image: Optional[str] = ""  # base64
+    catalog_image: Optional[str] = ""
+    qr_value: Optional[str] = ""        # MANUAL - from Excel or form
+    buying_price: Optional[float] = None
+    selling_price: Optional[float] = None
+    swatch_images: Optional[list] = None  # list of base64 images
 
 class IssueIn(BaseModel):
     catalog_id: str
     customer_name: Optional[str] = ""
+    employee_id: Optional[str] = None
     employee_name: Optional[str] = ""
     department: Optional[str] = ""
-    mobile: Optional[str] = ""
+    mobile: str       # MANDATORY (validated below)
     email: Optional[str] = ""
-    issue_date: Optional[str] = None  # ISO
+    issue_date: Optional[str] = None
     expected_return_date: Optional[str] = None
     remarks: Optional[str] = ""
 
@@ -218,26 +243,23 @@ class ScanIn(BaseModel):
     remarks: Optional[str] = ""
 
 
-# -----------------------------------------------------------------------------
-# Auth Endpoints
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Auth
+# ---------------------------------------------------------------------------
 @api.post("/auth/login")
 async def login(body: LoginIn, response: Response, request: Request):
     email = body.email.lower().strip()
-    ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "n/a")
-    # key on email only so lockout works behind load balancers
     identifier = f"email:{email}"
-
-    # brute force check
     attempt = await db.login_attempts.find_one({"identifier": identifier})
     if attempt and attempt.get("locked_until"):
         locked_until = datetime.fromisoformat(attempt["locked_until"])
+        if locked_until.tzinfo is None:
+            locked_until = locked_until.replace(tzinfo=timezone.utc)
         if locked_until > now():
             raise HTTPException(status_code=429, detail="Too many failed attempts. Try again later.")
 
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(body.password, user["password_hash"]):
-        # record failure
         attempts = (attempt.get("count", 0) if attempt else 0) + 1
         update = {"count": attempts, "updated_at": iso(now())}
         if attempts >= 5:
@@ -246,36 +268,35 @@ async def login(body: LoginIn, response: Response, request: Request):
         await db.login_attempts.update_one({"identifier": identifier},
                                            {"$set": {"identifier": identifier, **update}}, upsert=True)
         raise HTTPException(status_code=401, detail="Invalid email or password")
-
     if not user.get("is_active", True):
         raise HTTPException(status_code=403, detail="Account disabled")
-
     await db.login_attempts.delete_one({"identifier": identifier})
 
     uid = str(user["_id"])
     access = create_access_token(uid, email, user["role"])
     refresh = create_refresh_token(uid)
     set_auth_cookies(response, access, refresh)
-
     user["id"] = uid
     user.pop("_id"); user.pop("password_hash", None)
     await db.audit_logs.insert_one({"user_id": uid, "user_email": email, "action": "login",
-                                    "description": "User logged in", "ip_address": ip,
+                                    "description": "User logged in",
+                                    "record_affected": email,
+                                    "ip_address": (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+                                                  or (request.client.host if request.client else "n/a"),
                                     "created_at": iso(now())})
     return doc_to_json(user)
 
 @api.post("/auth/register")
 async def register(body: RegisterIn, request: Request, current=Depends(get_current_user)):
-    if current["role"] != "admin":
+    if current["role"] != ROLE_ADMIN:
         raise HTTPException(status_code=403, detail="Only admins can create users")
     email = body.email.lower().strip()
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="Email already registered")
     doc = {"email": email, "password_hash": hash_password(body.password),
-           "name": body.name, "role": body.role, "is_active": True,
-           "created_at": iso(now())}
+           "name": body.name, "role": body.role, "is_active": True, "created_at": iso(now())}
     res = await db.users.insert_one(doc)
-    await audit(current, "user_created", f"Created user {email} ({body.role})", request)
+    await audit(current, "user_created", f"Created user {email} ({body.role})", request, email)
     doc["id"] = str(res.inserted_id); doc.pop("password_hash")
     return doc_to_json(doc)
 
@@ -314,7 +335,7 @@ async def change_password(body: ChangePasswordIn, request: Request, user=Depends
         raise HTTPException(status_code=400, detail="Current password is incorrect")
     await db.users.update_one({"_id": ObjectId(user["id"])},
                               {"$set": {"password_hash": hash_password(body.new_password)}})
-    await audit(user, "password_change", "User changed password", request)
+    await audit(user, "password_change", "User changed password", request, user["email"])
     return {"ok": True}
 
 @api.post("/auth/forgot-password")
@@ -328,8 +349,8 @@ async def forgot_password(body: ForgotPasswordIn):
             "expires_at": iso(now() + timedelta(hours=1)),
             "used": False, "created_at": iso(now())
         })
-        log.info(f"Password reset link for {email}: /reset-password?token={token}")
-    return {"ok": True, "message": "If account exists, a reset link has been sent."}
+        log.info(f"Password reset for {email}: token={token}")
+    return {"ok": True, "message": "If account exists, a reset token has been generated."}
 
 @api.post("/auth/reset-password")
 async def reset_password(body: ResetPasswordIn):
@@ -349,28 +370,60 @@ async def reset_password(body: ResetPasswordIn):
     return {"ok": True}
 
 
-# -----------------------------------------------------------------------------
-# Users (Admin)
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Users (Admin only)
+# ---------------------------------------------------------------------------
 @api.get("/users")
-async def list_users(user=Depends(require_role("admin"))):
-    cursor = db.users.find({}, {"password_hash": 0}).sort("created_at", -1)
-    return [doc_to_json(d) for d in await cursor.to_list(500)]
+async def list_users(user=Depends(require_role(ROLE_ADMIN))):
+    rows = await db.users.find({}, {"password_hash": 0}).sort("created_at", -1).to_list(500)
+    return [doc_to_json(d) for d in rows]
 
 @api.patch("/users/{user_id}")
-async def update_user(user_id: str, payload: dict, request: Request, user=Depends(require_role("admin"))):
+async def update_user(user_id: str, payload: dict, request: Request, user=Depends(require_role(ROLE_ADMIN))):
     allowed = {k: v for k, v in payload.items() if k in ("name", "role", "is_active")}
-    if "password" in payload and payload["password"]:
+    if payload.get("password"):
         allowed["password_hash"] = hash_password(payload["password"])
     await db.users.update_one({"_id": ObjectId(user_id)}, {"$set": allowed})
-    await audit(user, "user_updated", f"Updated user {user_id}", request)
+    await audit(user, "user_updated", f"Updated user {user_id}", request, user_id)
     doc = await db.users.find_one({"_id": ObjectId(user_id)}, {"password_hash": 0})
     return doc_to_json(doc)
 
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Employees (Admin & Supervisor)
+# ---------------------------------------------------------------------------
+@api.get("/employees")
+async def list_employees(active_only: bool = False, user=Depends(get_current_user)):
+    q = {"is_active": True} if active_only else {}
+    rows = await db.employees.find(q).sort("name", 1).to_list(1000)
+    return [doc_to_json(d) for d in rows]
+
+@api.post("/employees")
+async def create_employee(body: EmployeeIn, request: Request, user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
+    doc = body.model_dump()
+    doc["created_at"] = iso(now()); doc["updated_at"] = iso(now())
+    res = await db.employees.insert_one(doc)
+    await audit(user, "employee_created", f"Employee {body.name}", request, body.employee_code or body.name)
+    doc["id"] = str(res.inserted_id); doc.pop("_id", None)
+    return doc
+
+@api.patch("/employees/{eid}")
+async def update_employee(eid: str, body: EmployeeIn, request: Request, user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
+    data = body.model_dump(); data["updated_at"] = iso(now())
+    await db.employees.update_one({"_id": ObjectId(eid)}, {"$set": data})
+    await audit(user, "employee_updated", f"Employee {eid}", request, eid)
+    return doc_to_json(await db.employees.find_one({"_id": ObjectId(eid)}))
+
+@api.delete("/employees/{eid}")
+async def delete_employee(eid: str, request: Request, user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
+    await db.employees.update_one({"_id": ObjectId(eid)}, {"$set": {"is_active": False, "updated_at": iso(now())}})
+    await audit(user, "employee_deactivated", f"Employee {eid}", request, eid)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
 # Categories
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 @api.get("/categories")
 async def list_categories(include_archived: bool = False, user=Depends(get_current_user)):
     q = {} if include_archived else {"is_archived": {"$ne": True}}
@@ -378,38 +431,38 @@ async def list_categories(include_archived: bool = False, user=Depends(get_curre
     return [doc_to_json(d) for d in rows]
 
 @api.post("/categories")
-async def create_category(body: CategoryIn, request: Request, user=Depends(require_role("admin", "manager"))):
+async def create_category(body: CategoryIn, request: Request, user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
     doc = {"name": body.name.strip(), "description": body.description or "",
            "is_archived": False, "created_at": iso(now()), "updated_at": iso(now())}
     res = await db.categories.insert_one(doc)
-    await audit(user, "category_created", f"Category {body.name}", request)
+    await audit(user, "category_created", f"Category {body.name}", request, body.name)
     doc["id"] = str(res.inserted_id); doc.pop("_id", None)
     return doc
 
 @api.patch("/categories/{cid}")
-async def update_category(cid: str, body: CategoryIn, request: Request, user=Depends(require_role("admin", "manager"))):
+async def update_category(cid: str, body: CategoryIn, request: Request, user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
     await db.categories.update_one({"_id": ObjectId(cid)},
                                    {"$set": {"name": body.name, "description": body.description,
                                              "updated_at": iso(now())}})
-    await audit(user, "category_updated", f"Category {cid}", request)
+    await audit(user, "category_updated", f"Category {cid}", request, cid)
     return doc_to_json(await db.categories.find_one({"_id": ObjectId(cid)}))
 
 @api.post("/categories/{cid}/archive")
-async def archive_category(cid: str, request: Request, user=Depends(require_role("admin", "manager"))):
+async def archive_category(cid: str, request: Request, user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
     await db.categories.update_one({"_id": ObjectId(cid)}, {"$set": {"is_archived": True, "updated_at": iso(now())}})
-    await audit(user, "category_archived", f"Category {cid}", request)
+    await audit(user, "category_archived", f"Category {cid}", request, cid)
     return {"ok": True}
 
 @api.post("/categories/{cid}/restore")
-async def restore_category(cid: str, request: Request, user=Depends(require_role("admin", "manager"))):
+async def restore_category(cid: str, request: Request, user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
     await db.categories.update_one({"_id": ObjectId(cid)}, {"$set": {"is_archived": False, "updated_at": iso(now())}})
-    await audit(user, "category_restored", f"Category {cid}", request)
+    await audit(user, "category_restored", f"Category {cid}", request, cid)
     return {"ok": True}
 
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Suppliers
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 @api.get("/suppliers")
 async def list_suppliers(include_archived: bool = False, user=Depends(get_current_user)):
     q = {} if include_archived else {"is_archived": {"$ne": True}}
@@ -417,37 +470,37 @@ async def list_suppliers(include_archived: bool = False, user=Depends(get_curren
     return [doc_to_json(d) for d in rows]
 
 @api.post("/suppliers")
-async def create_supplier(body: SupplierIn, request: Request, user=Depends(require_role("admin", "manager"))):
+async def create_supplier(body: SupplierIn, request: Request, user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
     doc = body.model_dump(); doc["is_archived"] = False
     doc["created_at"] = iso(now()); doc["updated_at"] = iso(now())
     res = await db.suppliers.insert_one(doc)
-    await audit(user, "supplier_created", f"Supplier {body.name}", request)
+    await audit(user, "supplier_created", f"Supplier {body.name}", request, body.name)
     doc["id"] = str(res.inserted_id); doc.pop("_id", None)
     return doc
 
 @api.patch("/suppliers/{sid}")
-async def update_supplier(sid: str, body: SupplierIn, request: Request, user=Depends(require_role("admin", "manager"))):
+async def update_supplier(sid: str, body: SupplierIn, request: Request, user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
     data = body.model_dump(); data["updated_at"] = iso(now())
     await db.suppliers.update_one({"_id": ObjectId(sid)}, {"$set": data})
-    await audit(user, "supplier_updated", f"Supplier {sid}", request)
+    await audit(user, "supplier_updated", f"Supplier {sid}", request, sid)
     return doc_to_json(await db.suppliers.find_one({"_id": ObjectId(sid)}))
 
 @api.post("/suppliers/{sid}/archive")
-async def archive_supplier(sid: str, request: Request, user=Depends(require_role("admin", "manager"))):
+async def archive_supplier(sid: str, request: Request, user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
     await db.suppliers.update_one({"_id": ObjectId(sid)}, {"$set": {"is_archived": True, "updated_at": iso(now())}})
-    await audit(user, "supplier_archived", f"Supplier {sid}", request)
+    await audit(user, "supplier_archived", f"Supplier {sid}", request, sid)
     return {"ok": True}
 
 @api.post("/suppliers/{sid}/restore")
-async def restore_supplier(sid: str, request: Request, user=Depends(require_role("admin", "manager"))):
+async def restore_supplier(sid: str, request: Request, user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
     await db.suppliers.update_one({"_id": ObjectId(sid)}, {"$set": {"is_archived": False, "updated_at": iso(now())}})
-    await audit(user, "supplier_restored", f"Supplier {sid}", request)
+    await audit(user, "supplier_restored", f"Supplier {sid}", request, sid)
     return {"ok": True}
 
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Catalogs
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 def gen_barcode_svg(value: str) -> str:
     cls = pybarcode.get_barcode_class('code128')
     obj = cls(value, writer=SVGWriter())
@@ -462,6 +515,7 @@ def gen_qr_svg(payload: str) -> str:
     img.save(buf)
     return buf.getvalue().decode("utf-8")
 
+
 @api.get("/catalogs")
 async def list_catalogs(
     q: Optional[str] = None,
@@ -474,7 +528,7 @@ async def list_catalogs(
     limit: int = 50,
     user=Depends(get_current_user)
 ):
-    filt: dict = {}
+    filt = {}
     if not include_archived:
         filt["is_archived"] = {"$ne": True}
     if status:
@@ -490,28 +544,31 @@ async def list_catalogs(
             {"catalog_code": {"$regex": q, "$options": "i"}},
             {"catalog_name": {"$regex": q, "$options": "i"}},
             {"color": {"$regex": q, "$options": "i"}},
+            {"qr_value": {"$regex": q, "$options": "i"}},
         ]
     total = await db.catalogs.count_documents(filt)
     rows = await db.catalogs.find(filt).sort("created_at", -1).skip(skip).limit(limit).to_list(limit)
-    return {"total": total, "items": [doc_to_json(d) for d in rows]}
+    items = [strip_buying_price(doc_to_json(d), user["role"]) for d in rows]
+    return {"total": total, "items": items}
 
 @api.get("/catalogs/{cid}")
 async def get_catalog(cid: str, user=Depends(get_current_user)):
     doc = await db.catalogs.find_one({"_id": ObjectId(cid)})
     if not doc:
         raise HTTPException(404, "Not found")
-    return doc_to_json(doc)
+    return strip_buying_price(doc_to_json(doc), user["role"])
 
 @api.post("/catalogs")
-async def create_catalog(body: CatalogIn, request: Request, user=Depends(require_role("admin", "manager"))):
+async def create_catalog(body: CatalogIn, request: Request, user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
     if await db.catalogs.find_one({"catalog_code": body.catalog_code}):
         raise HTTPException(400, "Catalog code already exists")
     doc = body.model_dump()
-    barcode_value = body.catalog_code
-    qr_payload = f"CATALOG|{body.catalog_code}|{body.catalog_name}"
+    # only admin can set buying_price
+    if user["role"] != ROLE_ADMIN:
+        doc.pop("buying_price", None)
     doc.update({
-        "barcode_value": barcode_value,
-        "qr_value": qr_payload,
+        "barcode_value": body.catalog_code,
+        "qr_value": (body.qr_value or "").strip(),  # manual; NOT auto-generated
         "status": "Available",
         "is_archived": False,
         "created_at": iso(now()),
@@ -519,32 +576,41 @@ async def create_catalog(body: CatalogIn, request: Request, user=Depends(require
         "created_by": user["email"]
     })
     res = await db.catalogs.insert_one(doc)
-    await audit(user, "catalog_created", f"Catalog {body.catalog_code}", request)
+    await audit(user, "catalog_created", f"Catalog {body.catalog_code}", request, body.catalog_code)
     doc["id"] = str(res.inserted_id); doc.pop("_id", None)
-    return doc
+    return strip_buying_price(doc, user["role"])
 
 @api.patch("/catalogs/{cid}")
-async def update_catalog(cid: str, body: CatalogIn, request: Request, user=Depends(require_role("admin", "manager"))):
+async def update_catalog(cid: str, body: CatalogIn, request: Request, user=Depends(require_role(ROLE_ADMIN))):
+    # ONLY ADMIN can edit catalogs
     data = body.model_dump()
     data["updated_at"] = iso(now())
     data["barcode_value"] = body.catalog_code
-    data["qr_value"] = f"CATALOG|{body.catalog_code}|{body.catalog_name}"
+    data["qr_value"] = (body.qr_value or "").strip()
+    existing = await db.catalogs.find_one({"_id": ObjectId(cid)})
+    if not existing:
+        raise HTTPException(404, "Not found")
+    # log price changes specifically
+    if existing.get("buying_price") != data.get("buying_price") or existing.get("selling_price") != data.get("selling_price"):
+        await audit(user, "price_updated",
+                    f"Catalog {existing.get('catalog_code')} buying={data.get('buying_price')} selling={data.get('selling_price')}",
+                    request, existing.get("catalog_code", cid))
     await db.catalogs.update_one({"_id": ObjectId(cid)}, {"$set": data})
-    await audit(user, "catalog_updated", f"Catalog {cid}", request)
-    return doc_to_json(await db.catalogs.find_one({"_id": ObjectId(cid)}))
+    await audit(user, "catalog_updated", f"Catalog {cid}", request, existing.get("catalog_code", cid))
+    return strip_buying_price(doc_to_json(await db.catalogs.find_one({"_id": ObjectId(cid)})), user["role"])
 
 @api.post("/catalogs/{cid}/archive")
-async def archive_catalog(cid: str, request: Request, user=Depends(require_role("admin", "manager"))):
+async def archive_catalog(cid: str, request: Request, user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
     await db.catalogs.update_one({"_id": ObjectId(cid)},
                                  {"$set": {"is_archived": True, "status": "Archived", "updated_at": iso(now())}})
-    await audit(user, "catalog_archived", f"Catalog {cid}", request)
+    await audit(user, "catalog_archived", f"Catalog {cid}", request, cid)
     return {"ok": True}
 
 @api.post("/catalogs/{cid}/restore")
-async def restore_catalog(cid: str, request: Request, user=Depends(require_role("admin", "manager"))):
+async def restore_catalog(cid: str, request: Request, user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
     await db.catalogs.update_one({"_id": ObjectId(cid)},
                                  {"$set": {"is_archived": False, "status": "Available", "updated_at": iso(now())}})
-    await audit(user, "catalog_restored", f"Catalog {cid}", request)
+    await audit(user, "catalog_restored", f"Catalog {cid}", request, cid)
     return {"ok": True}
 
 @api.get("/catalogs/{cid}/barcode.svg")
@@ -552,16 +618,17 @@ async def catalog_barcode_svg(cid: str, user=Depends(get_current_user)):
     doc = await db.catalogs.find_one({"_id": ObjectId(cid)})
     if not doc:
         raise HTTPException(404, "Not found")
-    svg = gen_barcode_svg(doc["barcode_value"])
-    return Response(content=svg, media_type="image/svg+xml")
+    return Response(content=gen_barcode_svg(doc["barcode_value"]), media_type="image/svg+xml")
 
 @api.get("/catalogs/{cid}/qr.svg")
 async def catalog_qr_svg(cid: str, user=Depends(get_current_user)):
     doc = await db.catalogs.find_one({"_id": ObjectId(cid)})
     if not doc:
         raise HTTPException(404, "Not found")
-    svg = gen_qr_svg(doc["qr_value"])
-    return Response(content=svg, media_type="image/svg+xml")
+    value = (doc.get("qr_value") or "").strip()
+    if not value:
+        raise HTTPException(404, "No QR value for this catalog")
+    return Response(content=gen_qr_svg(value), media_type="image/svg+xml")
 
 @api.get("/catalogs/{cid}/history")
 async def catalog_history(cid: str, user=Depends(get_current_user)):
@@ -575,25 +642,161 @@ async def catalog_history(cid: str, user=Depends(get_current_user)):
     }
 
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Catalog Bulk Import
+# ---------------------------------------------------------------------------
+IMPORT_COLUMNS = ["catalog_code", "catalog_name", "category", "supplier", "fabric_type",
+                  "material_composition", "gsm", "color", "total_swatches", "description",
+                  "qr_value", "buying_price", "selling_price"]
+
+@api.get("/catalogs/import/template.xlsx")
+async def catalog_import_template(user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
+    wb = Workbook(); ws = wb.active; ws.title = "Catalogs"
+    ws.append(IMPORT_COLUMNS)
+    ws.append(["FC-001", "Premium Cotton", "Cotton", "Acme Textiles", "Cotton",
+               "100% Cotton", 180, "Indigo", 12, "Soft hand feel",
+               "QR-FC-001-XYZ", 45.50, 75.00])
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    return Response(content=buf.read(),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": "attachment; filename=catalog_import_template.xlsx"})
+
+@api.post("/catalogs/import")
+async def catalog_import(request: Request,
+                         file: UploadFile = File(...),
+                         user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
+    raw = await file.read()
+    rows_in = []
+    try:
+        wb = load_workbook(io.BytesIO(raw), data_only=True)
+        ws = wb.active
+        headers = [str(c.value).strip().lower() if c.value else "" for c in ws[1]]
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            if all(v is None or str(v).strip() == "" for v in row):
+                continue
+            rows_in.append(dict(zip(headers, row)))
+    except Exception as e:
+        raise HTTPException(400, f"Could not parse Excel: {e}")
+
+    # cache categories/suppliers by name for quick lookup
+    cats = {c["name"].lower(): str(c["_id"]) async for c in db.categories.find({})}
+    sups = {s["name"].lower(): str(s["_id"]) async for s in db.suppliers.find({})}
+
+    success, errors = [], []
+    for i, r in enumerate(rows_in, start=2):
+        code = (r.get("catalog_code") or "").strip()
+        name = (r.get("catalog_name") or "").strip()
+        if not code or not name:
+            errors.append({"row": i, "error": "catalog_code and catalog_name are required"})
+            continue
+        if await db.catalogs.find_one({"catalog_code": code}):
+            errors.append({"row": i, "catalog_code": code, "error": "Already exists"})
+            continue
+        cat_name = (r.get("category") or "").strip().lower()
+        sup_name = (r.get("supplier") or "").strip().lower()
+        cat_id, sup_id = None, None
+        if cat_name:
+            cat_id = cats.get(cat_name)
+            if not cat_id:
+                # create category on the fly
+                res = await db.categories.insert_one({"name": (r.get("category") or "").strip(),
+                                                      "is_archived": False,
+                                                      "created_at": iso(now()), "updated_at": iso(now())})
+                cat_id = str(res.inserted_id); cats[cat_name] = cat_id
+        if sup_name:
+            sup_id = sups.get(sup_name)
+            if not sup_id:
+                res = await db.suppliers.insert_one({"name": (r.get("supplier") or "").strip(),
+                                                     "is_archived": False,
+                                                     "created_at": iso(now()), "updated_at": iso(now())})
+                sup_id = str(res.inserted_id); sups[sup_name] = sup_id
+
+        try:
+            gsm = float(r.get("gsm")) if r.get("gsm") not in (None, "") else None
+            total_swatches = int(r.get("total_swatches")) if r.get("total_swatches") not in (None, "") else 0
+            buying_price = float(r.get("buying_price")) if r.get("buying_price") not in (None, "") else None
+            selling_price = float(r.get("selling_price")) if r.get("selling_price") not in (None, "") else None
+        except (ValueError, TypeError) as e:
+            errors.append({"row": i, "catalog_code": code, "error": f"Numeric field invalid: {e}"})
+            continue
+
+        doc = {
+            "catalog_code": code, "catalog_name": name,
+            "category_id": cat_id, "supplier_id": sup_id,
+            "fabric_type": (r.get("fabric_type") or "").strip(),
+            "material_composition": (r.get("material_composition") or "").strip(),
+            "gsm": gsm, "color": (r.get("color") or "").strip(),
+            "total_swatches": total_swatches,
+            "description": (r.get("description") or "").strip(),
+            "qr_value": (r.get("qr_value") or "").strip(),
+            "buying_price": buying_price if user["role"] == ROLE_ADMIN else None,
+            "selling_price": selling_price,
+            "catalog_image": "", "swatch_images": [],
+            "barcode_value": code,
+            "status": "Available", "is_archived": False,
+            "created_at": iso(now()), "updated_at": iso(now()),
+            "created_by": user["email"], "imported": True,
+        }
+        await db.catalogs.insert_one(doc)
+        success.append({"row": i, "catalog_code": code})
+
+    # tracking record
+    await db.import_logs.insert_one({
+        "user_id": user["id"], "user_email": user["email"],
+        "filename": file.filename, "total_rows": len(rows_in),
+        "success_count": len(success), "error_count": len(errors),
+        "errors": errors[:50], "created_at": iso(now())
+    })
+    await audit(user, "catalog_import",
+                f"Imported {len(success)}/{len(rows_in)} from {file.filename}",
+                request, file.filename)
+    return {"success": success, "errors": errors,
+            "total": len(rows_in), "imported": len(success), "failed": len(errors)}
+
+
+# ---------------------------------------------------------------------------
 # Issues & Returns
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 @api.get("/issues")
-async def list_issues(active_only: bool = False, user=Depends(get_current_user)):
-    q = {"status": "Active"} if active_only else {}
-    rows = await db.catalog_issues.find(q).sort("created_at", -1).to_list(500)
+async def list_issues(filter: Optional[str] = None, user=Depends(get_current_user)):
+    q = {}
+    today = now().date()
+    week_end = today + timedelta(days=7)
+    if filter == "active":
+        q["status"] = "Active"
+    elif filter == "due_today":
+        q["status"] = "Active"
+        q["expected_return_date"] = {"$regex": f"^{today.isoformat()}"}
+    elif filter == "due_week":
+        q["status"] = "Active"
+        q["expected_return_date"] = {"$gte": today.isoformat(), "$lte": week_end.isoformat()}
+    elif filter == "overdue":
+        q["status"] = "Active"
+        q["expected_return_date"] = {"$lt": today.isoformat(), "$ne": ""}
+    rows = await db.catalog_issues.find(q).sort("created_at", -1).to_list(1000)
     items = [doc_to_json(d) for d in rows]
-    # enrich with catalog info
     for it in items:
         if it.get("catalog_id"):
             cat = await db.catalogs.find_one({"_id": ObjectId(it["catalog_id"])})
             if cat:
                 it["catalog_code"] = cat.get("catalog_code")
                 it["catalog_name"] = cat.get("catalog_name")
+        # compute overdue_days
+        if it.get("status") == "Active" and it.get("expected_return_date"):
+            try:
+                due = datetime.fromisoformat(it["expected_return_date"].split("T")[0]).date()
+                it["overdue_days"] = max(0, (today - due).days)
+                it["is_overdue"] = it["overdue_days"] > 0
+            except Exception:
+                it["overdue_days"] = 0
+                it["is_overdue"] = False
     return items
 
 @api.post("/issues")
-async def create_issue(body: IssueIn, request: Request, user=Depends(require_role("admin", "manager", "staff"))):
+async def create_issue(body: IssueIn, request: Request, user=Depends(get_current_user)):
+    # all roles can issue
+    if not body.mobile or not MOBILE_RE.match(body.mobile.strip()):
+        raise HTTPException(status_code=400, detail="Valid mobile number is required (7-20 digits, +-/spaces allowed)")
     cat = await db.catalogs.find_one({"_id": ObjectId(body.catalog_id)})
     if not cat:
         raise HTTPException(404, "Catalog not found")
@@ -601,7 +804,14 @@ async def create_issue(body: IssueIn, request: Request, user=Depends(require_rol
         raise HTTPException(400, "Catalog is already issued")
     if cat.get("is_archived"):
         raise HTTPException(400, "Catalog is archived")
+    # resolve employee name from id if provided
+    employee_name = body.employee_name or ""
+    if body.employee_id:
+        emp = await db.employees.find_one({"_id": ObjectId(body.employee_id)})
+        if emp:
+            employee_name = emp.get("name", employee_name)
     doc = body.model_dump()
+    doc["employee_name"] = employee_name
     doc["status"] = "Active"
     doc["issued_by"] = user["email"]
     doc["issue_date"] = doc.get("issue_date") or iso(now())
@@ -609,13 +819,16 @@ async def create_issue(body: IssueIn, request: Request, user=Depends(require_rol
     res = await db.catalog_issues.insert_one(doc)
     await db.catalogs.update_one({"_id": ObjectId(body.catalog_id)},
                                  {"$set": {"status": "Issued", "updated_at": iso(now())}})
-    await audit(user, "catalog_issued", f"Catalog {cat['catalog_code']} issued to {body.customer_name or body.employee_name}", request)
+    await audit(user, "catalog_issued",
+                f"Catalog {cat['catalog_code']} issued to {body.customer_name or employee_name} ({body.mobile})",
+                request, cat['catalog_code'])
     doc["id"] = str(res.inserted_id); doc.pop("_id", None)
     return doc
 
+
 @api.get("/returns")
-async def list_returns(user=Depends(get_current_user)):
-    rows = await db.catalog_returns.find({}).sort("created_at", -1).to_list(500)
+async def list_returns(user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
+    rows = await db.catalog_returns.find({}).sort("created_at", -1).to_list(1000)
     items = [doc_to_json(d) for d in rows]
     for it in items:
         if it.get("catalog_id"):
@@ -623,10 +836,16 @@ async def list_returns(user=Depends(get_current_user)):
             if cat:
                 it["catalog_code"] = cat.get("catalog_code")
                 it["catalog_name"] = cat.get("catalog_name")
+        # also bring last issue for mobile/customer
+        last_issue = await db.catalog_issues.find_one({"catalog_id": it.get("catalog_id"), "status": {"$in": ["Returned", "Active"]}},
+                                                     sort=[("created_at", -1)])
+        if last_issue:
+            it["customer_name"] = last_issue.get("customer_name")
+            it["mobile"] = last_issue.get("mobile")
     return items
 
 @api.post("/returns")
-async def create_return(body: ReturnIn, request: Request, user=Depends(require_role("admin", "manager", "staff"))):
+async def create_return(body: ReturnIn, request: Request, user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
     cat = await db.catalogs.find_one({"_id": ObjectId(body.catalog_id)})
     if not cat:
         raise HTTPException(404, "Catalog not found")
@@ -637,44 +856,41 @@ async def create_return(body: ReturnIn, request: Request, user=Depends(require_r
     doc["received_by"] = user["email"]
     doc["created_at"] = iso(now())
     res = await db.catalog_returns.insert_one(doc)
-
-    # mark related active issue as returned
     await db.catalog_issues.update_many({"catalog_id": body.catalog_id, "status": "Active"},
                                         {"$set": {"status": "Returned", "actual_return_date": doc["return_date"]}})
     await db.catalogs.update_one({"_id": ObjectId(body.catalog_id)},
                                  {"$set": {"status": "Returned", "updated_at": iso(now())}})
-    await audit(user, "catalog_returned", f"Catalog {cat['catalog_code']} returned ({body.condition})", request)
+    await audit(user, "catalog_returned",
+                f"Catalog {cat['catalog_code']} returned ({body.condition})",
+                request, cat['catalog_code'])
     doc["id"] = str(res.inserted_id); doc.pop("_id", None)
     return doc
 
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Scans
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 @api.post("/scans")
 async def scan_barcode(body: ScanIn, request: Request, user=Depends(get_current_user)):
-    cat = await db.catalogs.find_one({"barcode_value": body.barcode_value})
+    code = body.barcode_value.strip()
+    # try barcode (catalog_code), then qr_value
+    cat = await db.catalogs.find_one({"$or": [
+        {"barcode_value": code},
+        {"catalog_code": code},
+        {"qr_value": code},
+    ]})
     if not cat:
-        # try QR payload format CATALOG|code|name
-        if body.barcode_value.startswith("CATALOG|"):
-            parts = body.barcode_value.split("|")
-            if len(parts) >= 2:
-                cat = await db.catalogs.find_one({"catalog_code": parts[1]})
-    if not cat:
-        raise HTTPException(404, "Catalog not found for this code")
+        raise HTTPException(404, "No catalog matched this code or QR")
     doc = {
         "catalog_id": str(cat["_id"]),
         "user_id": user["id"], "user_email": user["email"],
-        "device_type": body.device_type,
-        "action": body.action,
-        "remarks": body.remarks,
-        "created_at": iso(now())
+        "device_type": body.device_type, "action": body.action,
+        "remarks": body.remarks, "created_at": iso(now())
     }
     res = await db.scan_history.insert_one(doc)
-    await audit(user, "barcode_scan", f"Scanned {cat['catalog_code']} ({body.action})", request)
-    doc["id"] = str(res.inserted_id)
-    doc.pop("_id", None)
-    return {"catalog": doc_to_json(cat), "scan": doc}
+    await audit(user, "barcode_scan", f"Scanned {cat['catalog_code']} ({body.action})", request, cat['catalog_code'])
+    doc["id"] = str(res.inserted_id); doc.pop("_id", None)
+    return {"catalog": strip_buying_price(doc_to_json(cat), user["role"]), "scan": doc}
 
 @api.get("/scans")
 async def list_scans(limit: int = 100, user=Depends(get_current_user)):
@@ -689,21 +905,29 @@ async def list_scans(limit: int = 100, user=Depends(get_current_user)):
     return items
 
 
-# -----------------------------------------------------------------------------
-# Audit Logs
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Audit / Import logs
+# ---------------------------------------------------------------------------
 @api.get("/audit-logs")
-async def list_audit_logs(limit: int = 200, user=Depends(require_role("admin", "manager"))):
+async def list_audit_logs(limit: int = 300, user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
     rows = await db.audit_logs.find({}).sort("created_at", -1).limit(limit).to_list(limit)
     return [doc_to_json(d) for d in rows]
 
+@api.get("/import-logs")
+async def list_import_logs(user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
+    rows = await db.import_logs.find({}).sort("created_at", -1).limit(100).to_list(100)
+    return [doc_to_json(d) for d in rows]
 
-# -----------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
 # Dashboard
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 @api.get("/dashboard/stats")
 async def dashboard_stats(user=Depends(get_current_user)):
-    today_start = datetime.combine(now().date(), datetime.min.time(), tzinfo=timezone.utc).isoformat()
+    today = now().date()
+    today_iso = today.isoformat()
+    week_end_iso = (today + timedelta(days=7)).isoformat()
+    today_start = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc).isoformat()
 
     total = await db.catalogs.count_documents({"is_archived": {"$ne": True}})
     available = await db.catalogs.count_documents({"status": "Available", "is_archived": {"$ne": True}})
@@ -712,12 +936,26 @@ async def dashboard_stats(user=Depends(get_current_user)):
     archived = await db.catalogs.count_documents({"is_archived": True})
     suppliers = await db.suppliers.count_documents({"is_archived": {"$ne": True}})
     categories = await db.categories.count_documents({"is_archived": {"$ne": True}})
+    employees = await db.employees.count_documents({"is_active": True})
     scans_today = await db.scan_history.count_documents({"created_at": {"$gte": today_start}})
 
-    # overdue: active issues past expected return date
+    due_today = await db.catalog_issues.count_documents({
+        "status": "Active",
+        "expected_return_date": {"$regex": f"^{today_iso}"}
+    })
+    due_week = await db.catalog_issues.count_documents({
+        "status": "Active",
+        "expected_return_date": {"$gte": today_iso, "$lte": week_end_iso}
+    })
+    overdue_count = await db.catalog_issues.count_documents({
+        "status": "Active",
+        "expected_return_date": {"$lt": today_iso, "$ne": ""}
+    })
+
+    # overdue list with details
     overdue_cursor = db.catalog_issues.find({
         "status": "Active",
-        "expected_return_date": {"$lt": iso(now()), "$ne": None}
+        "expected_return_date": {"$lt": today_iso, "$ne": ""}
     }).sort("expected_return_date", 1).limit(20)
     overdue = []
     for it in await overdue_cursor.to_list(20):
@@ -726,9 +964,14 @@ async def dashboard_stats(user=Depends(get_current_user)):
         if cat:
             item["catalog_code"] = cat.get("catalog_code")
             item["catalog_name"] = cat.get("catalog_name")
+        try:
+            d = datetime.fromisoformat(item["expected_return_date"].split("T")[0]).date()
+            item["overdue_days"] = (today - d).days
+        except Exception:
+            item["overdue_days"] = 0
         overdue.append(item)
 
-    recent_added = [doc_to_json(d) for d in await db.catalogs.find({"is_archived": {"$ne": True}})
+    recent_added = [strip_buying_price(doc_to_json(d), user["role"]) for d in await db.catalogs.find({"is_archived": {"$ne": True}})
                     .sort("created_at", -1).limit(8).to_list(8)]
     recent_returned = [doc_to_json(d) for d in await db.catalog_returns.find({}).sort("created_at", -1).limit(8).to_list(8)]
 
@@ -736,8 +979,9 @@ async def dashboard_stats(user=Depends(get_current_user)):
         "totals": {
             "total_catalogs": total, "available": available, "issued": issued,
             "returned": returned, "archived": archived,
-            "suppliers": suppliers, "categories": categories, "scans_today": scans_today,
-            "overdue": len(overdue),
+            "suppliers": suppliers, "categories": categories, "employees": employees,
+            "scans_today": scans_today,
+            "due_today": due_today, "due_week": due_week, "overdue": overdue_count,
         },
         "recently_added": recent_added,
         "recently_returned": recent_returned,
@@ -746,11 +990,9 @@ async def dashboard_stats(user=Depends(get_current_user)):
 
 @api.get("/dashboard/charts")
 async def dashboard_charts(user=Depends(get_current_user)):
-    # monthly issues vs returns (last 6 months)
     months = []
     today = now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
     for i in range(5, -1, -1):
-        # naive month subtraction
         month = (today.month - i - 1) % 12 + 1
         year = today.year + ((today.month - i - 1) // 12)
         start = datetime(year, month, 1, tzinfo=timezone.utc)
@@ -762,7 +1004,6 @@ async def dashboard_charts(user=Depends(get_current_user)):
         ret = await db.catalog_returns.count_documents({"created_at": {"$gte": iso(start), "$lt": iso(end)}})
         months.append({"label": start.strftime("%b %Y"), "issues": iss, "returns": ret})
 
-    # category distribution
     cat_pipe = [{"$match": {"is_archived": {"$ne": True}}}, {"$group": {"_id": "$category_id", "count": {"$sum": 1}}}]
     cat_dist = []
     async for r in db.catalogs.aggregate(cat_pipe):
@@ -772,7 +1013,6 @@ async def dashboard_charts(user=Depends(get_current_user)):
             if c: name = c["name"]
         cat_dist.append({"name": name, "value": r["count"]})
 
-    # supplier distribution
     sup_pipe = [{"$match": {"is_archived": {"$ne": True}}}, {"$group": {"_id": "$supplier_id", "count": {"$sum": 1}}}]
     sup_dist = []
     async for r in db.catalogs.aggregate(sup_pipe):
@@ -782,7 +1022,6 @@ async def dashboard_charts(user=Depends(get_current_user)):
             if s: name = s["name"]
         sup_dist.append({"name": name, "value": r["count"]})
 
-    # most issued catalogs
     issued_pipe = [{"$group": {"_id": "$catalog_id", "count": {"$sum": 1}}},
                    {"$sort": {"count": -1}}, {"$limit": 8}]
     most_issued = []
@@ -791,7 +1030,6 @@ async def dashboard_charts(user=Depends(get_current_user)):
         c = await db.catalogs.find_one({"_id": ObjectId(r["_id"])})
         if c: most_issued.append({"name": c.get("catalog_name", c.get("catalog_code", "")), "value": r["count"]})
 
-    # most scanned
     scan_pipe = [{"$group": {"_id": "$catalog_id", "count": {"$sum": 1}}},
                  {"$sort": {"count": -1}}, {"$limit": 8}]
     most_scanned = []
@@ -805,27 +1043,28 @@ async def dashboard_charts(user=Depends(get_current_user)):
             "most_issued": most_issued, "most_scanned": most_scanned}
 
 
-# -----------------------------------------------------------------------------
-# Reports / Export
-# -----------------------------------------------------------------------------
-async def _catalog_rows(filter_status: Optional[str] = None, include_archived: bool = False):
+# ---------------------------------------------------------------------------
+# Reports
+# ---------------------------------------------------------------------------
+async def _catalog_rows(filter_status=None, include_archived=False):
     q = {}
-    if filter_status:
-        q["status"] = filter_status
-    if not include_archived:
-        q["is_archived"] = {"$ne": True}
-    return await db.catalogs.find(q).sort("created_at", -1).to_list(1000)
+    if filter_status: q["status"] = filter_status
+    if not include_archived: q["is_archived"] = {"$ne": True}
+    return await db.catalogs.find(q).sort("created_at", -1).to_list(2000)
 
 @api.get("/reports/catalogs/csv")
 async def report_catalogs_csv(status: Optional[str] = None, include_archived: bool = False, user=Depends(get_current_user)):
     rows = await _catalog_rows(status, include_archived)
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    w.writerow(["Code", "Name", "Status", "Fabric Type", "GSM", "Color", "Swatches", "Created"])
+    buf = io.StringIO(); w = csv.writer(buf)
+    hdr = ["Code", "Name", "Status", "Fabric", "GSM", "Color", "Swatches", "Selling Price"]
+    if user["role"] == ROLE_ADMIN: hdr.insert(7, "Buying Price")
+    hdr.append("Created"); w.writerow(hdr)
     for r in rows:
-        w.writerow([r.get("catalog_code"), r.get("catalog_name"), r.get("status"),
-                    r.get("fabric_type"), r.get("gsm"), r.get("color"),
-                    r.get("total_swatches"), r.get("created_at")])
+        row = [r.get("catalog_code"), r.get("catalog_name"), r.get("status"),
+               r.get("fabric_type"), r.get("gsm"), r.get("color"), r.get("total_swatches"),
+               r.get("selling_price")]
+        if user["role"] == ROLE_ADMIN: row.insert(7, r.get("buying_price"))
+        row.append(r.get("created_at")); w.writerow(row)
     buf.seek(0)
     return Response(content=buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": "attachment; filename=catalogs.csv"})
@@ -834,11 +1073,15 @@ async def report_catalogs_csv(status: Optional[str] = None, include_archived: bo
 async def report_catalogs_xlsx(status: Optional[str] = None, include_archived: bool = False, user=Depends(get_current_user)):
     rows = await _catalog_rows(status, include_archived)
     wb = Workbook(); ws = wb.active; ws.title = "Catalogs"
-    ws.append(["Code", "Name", "Status", "Fabric Type", "GSM", "Color", "Swatches", "Created"])
+    hdr = ["Code", "Name", "Status", "Fabric", "GSM", "Color", "Swatches", "Selling Price"]
+    if user["role"] == ROLE_ADMIN: hdr.insert(7, "Buying Price")
+    hdr.append("Created"); ws.append(hdr)
     for r in rows:
-        ws.append([r.get("catalog_code"), r.get("catalog_name"), r.get("status"),
-                   r.get("fabric_type"), r.get("gsm"), r.get("color"),
-                   r.get("total_swatches"), r.get("created_at")])
+        row = [r.get("catalog_code"), r.get("catalog_name"), r.get("status"),
+               r.get("fabric_type"), r.get("gsm"), r.get("color"), r.get("total_swatches"),
+               r.get("selling_price")]
+        if user["role"] == ROLE_ADMIN: row.insert(7, r.get("buying_price"))
+        row.append(r.get("created_at")); ws.append(row)
     buf = io.BytesIO(); wb.save(buf); buf.seek(0)
     return Response(content=buf.read(),
                     media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -850,14 +1093,19 @@ async def report_catalogs_pdf(status: Optional[str] = None, include_archived: bo
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4)
     styles = getSampleStyleSheet()
-    story = [Paragraph("Fabric Catalog Report", styles["Title"]),
+    story = [Paragraph("Royal Shades — Catalog Report", styles["Title"]),
              Paragraph(f"Generated: {now().strftime('%Y-%m-%d %H:%M UTC')}", styles["Normal"]),
              Spacer(1, 12)]
-    data = [["Code", "Name", "Status", "Fabric", "GSM", "Color", "Swatches"]]
+    hdr = ["Code", "Name", "Status", "Fabric", "GSM", "Color", "Swatches", "Sell"]
+    if user["role"] == ROLE_ADMIN: hdr.insert(7, "Buy")
+    data = [hdr]
     for r in rows:
-        data.append([r.get("catalog_code", ""), r.get("catalog_name", ""), r.get("status", ""),
-                     r.get("fabric_type", ""), str(r.get("gsm") or ""), r.get("color", ""),
-                     str(r.get("total_swatches") or 0)])
+        row = [r.get("catalog_code", ""), r.get("catalog_name", ""), r.get("status", ""),
+               r.get("fabric_type", ""), str(r.get("gsm") or ""),
+               r.get("color", ""), str(r.get("total_swatches") or 0),
+               str(r.get("selling_price") or "")]
+        if user["role"] == ROLE_ADMIN: row.insert(7, str(r.get("buying_price") or ""))
+        data.append(row)
     t = Table(data, repeatRows=1)
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f3a5f")),
@@ -874,31 +1122,38 @@ async def report_catalogs_pdf(status: Optional[str] = None, include_archived: bo
                     headers={"Content-Disposition": "attachment; filename=catalogs.pdf"})
 
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Health
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 @api.get("/")
 async def root():
-    return {"message": "Fabric Catalog API", "version": "1.0"}
+    return {"message": "Royal Shades Catalog API", "version": "2.0"}
 
 
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Startup
-# -----------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
 @app.on_event("startup")
 async def on_startup():
-    # Indexes
     try:
         await db.users.create_index("email", unique=True)
         await db.login_attempts.create_index("identifier")
-        await db.password_reset_tokens.create_index("expires_at", expireAfterSeconds=0)
         await db.catalogs.create_index("catalog_code", unique=True)
         await db.catalogs.create_index("barcode_value")
+        await db.catalogs.create_index("qr_value")
         await db.catalogs.create_index("status")
         await db.scan_history.create_index("created_at")
         await db.audit_logs.create_index("created_at")
+        await db.employees.create_index("name")
+        await db.catalog_issues.create_index("expected_return_date")
+        await db.catalog_issues.create_index("status")
     except Exception as e:
         log.warning(f"Index setup: {e}")
+
+    # Migrate role: manager -> supervisor
+    res = await db.users.update_many({"role": "manager"}, {"$set": {"role": "supervisor"}})
+    if res.modified_count:
+        log.info(f"Migrated {res.modified_count} user(s) from manager → supervisor")
 
     # Seed admin
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@example.com")
@@ -907,24 +1162,21 @@ async def on_startup():
     if not existing:
         await db.users.insert_one({
             "email": admin_email, "password_hash": hash_password(admin_password),
-            "name": "System Admin", "role": "admin", "is_active": True,
+            "name": "System Admin", "role": ROLE_ADMIN, "is_active": True,
             "created_at": iso(now())
         })
         log.info(f"Seeded admin: {admin_email}")
     elif not verify_password(admin_password, existing["password_hash"]):
         await db.users.update_one({"email": admin_email},
                                   {"$set": {"password_hash": hash_password(admin_password)}})
-        log.info(f"Updated admin password: {admin_email}")
 
 @app.on_event("shutdown")
 async def on_shutdown():
     client.close()
 
 
-# include router
 app.include_router(api)
 
-# CORS - must specify origin when allow_credentials=True
 frontend_url = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 allow = [frontend_url]
 extra = os.environ.get("CORS_ORIGINS", "")
