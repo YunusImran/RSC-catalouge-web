@@ -1,0 +1,49 @@
+{
+  "summary": "First testing iteration for Fabric Catalog system. Backend: 31/34 pytest cases pass (91%). Frontend: login, dashboard, all sidebar nav, charts, dark mode, logout, and scanner autofocus work. Found 3 real backend bugs: (a) POST /api/scans returns 500 due to leftover Mongo ObjectId _id in response body (this also breaks the frontend Scanner page), (b) POST /api/auth/reset-password returns 500 due to naive vs tz-aware datetime comparison on expires_at, (c) brute-force lockout is ineffective behind the k8s ingress because identifier uses request.client.host (internal pod IP that varies across replicas). Also: post-login navigates to '/' instead of '/dashboard' (UX nit; content still renders).",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/scans", "issue": "500 - leftover Mongo ObjectId _id in response. After db.scan_history.insert_one(doc), the dict is mutated with _id (ObjectId). Endpoint returns {'catalog': doc_to_json(cat), 'scan': doc} but does NOT pop _id from `doc`, so FastAPI's jsonable_encoder fails with TypeError: 'ObjectId' object is not iterable. Fix: doc['id'] = str(doc.pop('_id')) before return, OR return doc_to_json(doc).", "priority": "CRITICAL"},
+      {"endpoint": "POST /api/auth/reset-password", "issue": "500 - TypeError: can't compare offset-naive and offset-aware datetimes at server.py:338. password_reset_tokens.expires_at is stored as a tz-aware datetime via insert_one (kept as native datetime, not ISO string), but motor returns it back as a NAIVE datetime. Comparison `rec['expires_at'] < now()` where now() is tz-aware raises. Fix: store as ISO string (like other dates) and parse on read, OR ensure tz-awareness on comparison (e.g. expires_at = expires_at.replace(tzinfo=timezone.utc)).", "priority": "HIGH"},
+      {"endpoint": "POST /api/auth/login (brute-force)", "issue": "Lockout ineffective behind load balancer. identifier = `f\"{request.client.host}:{email}\"` resolves to k8s internal pod IPs (e.g. 10.219.11.197, 10.219.0.93) that load-balance per request, so each replica only sees ~1-2 attempts and never reaches 5. Confirmed reproducible: 7 sequential wrong-password POSTs through the public URL all returned 401, login_attempts collection had two docs split across pod IPs. Fix: key on email only (or honor X-Forwarded-For with a configured trust list).", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "All create endpoints", "issue": "Inconsistent return shapes: create_category/supplier/catalog manually pop _id and set id, while /scans forgets. Recommend wrapping with doc_to_json() consistently."},
+      {"endpoint": "Login response", "issue": "Cookies are set httpOnly + samesite=lax with `secure=False`. Should be secure=True over HTTPS in production for cookie hardening (low risk in preview)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "LoginPage redirect", "issue": "After successful login frontend navigates to '/' instead of '/dashboard' (Protected route renders Dashboard at root, so functionally OK but URL is misleading; broke our wait_for_url('**/dashboard**')).", "selector": "post-login redirect", "priority": "LOW"},
+      {"component": "Scanner page", "issue": "Submitting a valid barcode triggers POST /api/scans which returns 500 (see backend critical bug #1), so the scanner UI shows no catalog result and console logs a 500.", "selector": "[data-testid=\"scanner-submit-btn\"]", "priority": "CRITICAL"}
+    ],
+    "integration_issues": [
+      {"flow": "Barcode scan workflow", "issue": "Frontend scanner submission fails end-to-end due to backend /api/scans 500", "affected_selectors": ["[data-testid=\"scanner-input\"]", "[data-testid=\"scanner-submit-btn\"]"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_fabric_catalog.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": [
+    "Fix POST /api/scans to strip Mongo _id before returning (e.g. return {'catalog': doc_to_json(cat), 'scan': doc_to_json(doc)}).",
+    "Fix POST /api/auth/reset-password datetime comparison (store expires_at as ISO string OR coerce to UTC-aware on read).",
+    "Replace IP-based brute-force identifier with email-only key (or trust X-Forwarded-For) so lockout works behind k8s ingress.",
+    "Optional: redirect post-login navigate('/dashboard') instead of navigate('/') for clearer UX.",
+    "Optional: harden cookies to secure=True when running over HTTPS."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 932 lines - acceptable for an MVP but should be split (auth, catalogs, reports, etc.) once it grows further.",
+    "doc_to_json() helper is good but inconsistently applied (e.g. /scans return path).",
+    "expires_at stored as native datetime (line 327) while every other timestamp uses iso(now()) - inconsistent and is the direct cause of the reset-password 500.",
+    "Brute force lockout per IP+email is the standard pattern but only works if request.client.host is the *real* client; behind k8s ingress this is the previous-hop IP and load-balances across replicas. Configure --forwarded-allow-ips / X-Forwarded-For trust or drop the IP component.",
+    "audit() uses request.client.host with no proxy handling - audit IPs will likewise show internal pod IPs.",
+    "Catalog create_at/updated_at stored as ISO strings everywhere - the regression date filters in dashboard/charts depend on lexicographic ISO ordering which works (good) but cannot be indexed for range performance easily.",
+    "Reports endpoints accept any authenticated user (including staff). If business rule requires admin/manager only, add require_role."
+  ],
+  "updated_files": ["/app/backend/tests/test_fabric_catalog.py", "/app/test_reports/iteration_1.json", "/app/test_reports/pytest/pytest_results.xml"],
+  "success_rate": {"backend": "91% (31/34)", "frontend": "~85% (login, dashboard, charts, all nav, scanner autofocus, dark mode, logout all work; scan submission fails due to backend bug)"},
+  "test_credentials": "Admin: admin@fabriccatalog.com / Admin@123 (from /app/memory/test_credentials.md). Test data created during run: category 'Cotton', supplier 'Acme Textiles', catalog FC-001 'Premium Cotton Linen', manager user manager@test.com / NewPass@123 (password was changed during test).",
+  "seed_data_creation": "Created 1 category (Cotton), 1 supplier (Acme Textiles), 1 catalog (FC-001), 1 manager user (manager@test.com). login_attempts collection was cleared after the brute-force test so further runs are not blocked.",
+  "retest_needed": true,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Re-run /app/backend/tests/test_fabric_catalog.py after main agent fixes /api/scans, /api/auth/reset-password, and brute-force identifier. The tests are idempotent (they detect & reuse the seeded category/supplier/catalog/manager). If brute-force still fails behind ingress, the test asserts 429 on the 6th request - that assertion will fail until lockout keys on email only. NOTE: manager@test.com password is currently 'NewPass@123' (changed during run); test will reset it via PATCH /users automatically.",
+  "rca_of_the_issue": "1) /api/scans 500: pymongo insert_one mutates the inserted dict in-place adding ObjectId _id; the endpoint returns that dict directly and FastAPI's jsonable_encoder can't serialize ObjectId. 2) reset-password 500: expires_at stored as datetime (not ISO string), motor returns naive datetime on read, server compares with tz-aware now() -> TypeError. 3) Brute force lockout fail: behind k8s ingress, request.client.host = internal load-balancer pod IP that rotates, so the per-(ip,email) counter never reaches 5 from any single key."
+}
