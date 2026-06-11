@@ -1,0 +1,45 @@
+{
+  "summary": "Iteration 2 re-test after iteration 1 fixes. ALL THREE critical/high backend bugs are fixed and verified. Backend pytest 34/34 PASS (100%). Frontend smoke flow PASS: login -> /dashboard URL, KPIs/charts render, scanner submit navigates to /catalogs/{id}, catalogs CRUD, issue & return, reports CSV/XLSX/PDF all working. 0 console errors during the flow.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/auth/login", "issue": "Cookies still set with secure=False (httpOnly + samesite=lax). Should be secure=True over HTTPS for hardening. Low risk in preview env."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "fixes_verified": [
+    {"bug": "POST /api/scans 500 due to leftover Mongo _id", "fix": "server.py:676 doc.pop('_id', None) before return; returns doc_to_json(cat) + scan dict", "verified_by": "pytest TestScans::test_scan_by_barcode PASS + frontend Scanner submits FC-001 and navigates to /catalogs/{id}"},
+    {"bug": "POST /api/auth/reset-password 500 due to naive/aware datetime", "fix": "expires_at now stored as ISO string (server.py:328) and parsed with tz-aware coercion on read", "verified_by": "pytest TestForgotReset::test_forgot_then_reset PASS (token captured from logs, password reset, re-login succeeds)"},
+    {"bug": "Brute-force lockout ineffective behind k8s ingress (per-pod IP)", "fix": "identifier changed to email-only: f'email:{email}' (server.py:229); login_attempts indexed on identifier", "verified_by": "pytest TestBruteForce::test_lockout_after_5_failures PASS - 6th attempt returns 429 through public URL"},
+    {"bug": "Post-login redirect to /dashboard URL", "fix": "Login.jsx:20 navigate('/dashboard'); App.js route /dashboard added", "verified_by": "Playwright wait_for_url('**/dashboard**') passes; URL bar shows /dashboard after login"}
+  ],
+  "test_report_links": [
+    "/app/backend/tests/test_fabric_catalog.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional: harden cookies to secure=True when running over HTTPS (low priority)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now 940 lines - growing. Recommend splitting into auth/, catalogs/, reports/, scans/ modules before the next feature.",
+    "doc_to_json() is applied consistently in /scans now; good.",
+    "expires_at consistency restored (ISO string everywhere).",
+    "Brute-force identifier is now email-only which works behind ingress. Consider adding optional X-Forwarded-For trust if you also want IP-based throttling.",
+    "audit() still uses request.client.host without proxy handling - audit IPs in DB will show k8s pod IPs not real client IPs. Not critical but worth honoring X-Forwarded-For when behind ingress."
+  ],
+  "updated_files": [
+    "/app/test_reports/iteration_2.json",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "success_rate": {"backend": "100% (34/34)", "frontend": "100% smoke (login, dashboard KPIs+charts, scanner -> catalog detail, catalogs list, issues page, reports page; 0 console errors)"},
+  "test_credentials": "Admin: admin@fabriccatalog.com / Admin@123. Manager: manager@test.com / NewPass@123 (test self-resets it). Temp reset user: tmpreset@test.com / Reset@9999 (created by TestForgotReset).",
+  "seed_data_creation": "Reused iter1 seed (Cotton, Acme Textiles, FC-001 catalog). Tests are idempotent. login_attempts collection auto-cleaned in TestBruteForce::test_cleanup_lockouts at end of run.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All 3 iteration-1 critical bugs are fixed and verified. Backend at 100% (34/34). Frontend smoke path is clean. Only outstanding nits are cookie secure=True hardening and audit IP behind proxy - both LOW priority. Test file /app/backend/tests/test_fabric_catalog.py is the canonical regression suite.",
+  "rca_of_the_issue": "N/A - this iteration verified fixes. RCAs from iteration_1 confirmed resolved by code inspection (server.py:229,328,676; Login.jsx:20; App.js /dashboard route) and re-run of full pytest suite."
+}

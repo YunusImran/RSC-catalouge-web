@@ -224,8 +224,9 @@ class ScanIn(BaseModel):
 @api.post("/auth/login")
 async def login(body: LoginIn, response: Response, request: Request):
     email = body.email.lower().strip()
-    ip = request.client.host if request.client else "n/a"
-    identifier = f"{ip}:{email}"
+    ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "n/a")
+    # key on email only so lockout works behind load balancers
+    identifier = f"email:{email}"
 
     # brute force check
     attempt = await db.login_attempts.find_one({"identifier": identifier})
@@ -324,7 +325,7 @@ async def forgot_password(body: ForgotPasswordIn):
         token = secrets.token_urlsafe(32)
         await db.password_reset_tokens.insert_one({
             "token": token, "user_id": str(user["_id"]),
-            "expires_at": now() + timedelta(hours=1),
+            "expires_at": iso(now() + timedelta(hours=1)),
             "used": False, "created_at": iso(now())
         })
         log.info(f"Password reset link for {email}: /reset-password?token={token}")
@@ -335,7 +336,12 @@ async def reset_password(body: ResetPasswordIn):
     rec = await db.password_reset_tokens.find_one({"token": body.token, "used": False})
     if not rec:
         raise HTTPException(status_code=400, detail="Invalid or used token")
-    if rec["expires_at"] < now():
+    exp = rec["expires_at"]
+    if isinstance(exp, str):
+        exp = datetime.fromisoformat(exp)
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    if exp < now():
         raise HTTPException(status_code=400, detail="Token expired")
     await db.users.update_one({"_id": ObjectId(rec["user_id"])},
                               {"$set": {"password_hash": hash_password(body.new_password)}})
@@ -664,8 +670,10 @@ async def scan_barcode(body: ScanIn, request: Request, user=Depends(get_current_
         "remarks": body.remarks,
         "created_at": iso(now())
     }
-    await db.scan_history.insert_one(doc)
+    res = await db.scan_history.insert_one(doc)
     await audit(user, "barcode_scan", f"Scanned {cat['catalog_code']} ({body.action})", request)
+    doc["id"] = str(res.inserted_id)
+    doc.pop("_id", None)
     return {"catalog": doc_to_json(cat), "scan": doc}
 
 @api.get("/scans")

@@ -17,7 +17,7 @@ export default function Login() {
         setLoading(true);
         const ok = await login(email, password);
         setLoading(false);
-        if (ok) navigate("/");
+        if (ok) navigate("/dashboard");
     };
 
     return (

@@ -35,6 +35,7 @@ function Shell() {
             <Route path="/forgot-password" element={<ForgotPassword />} />
 
             <Route path="/" element={<Protected><Dashboard /></Protected>} />
+            <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
             <Route path="/catalogs" element={<Protected><Catalogs /></Protected>} />
             <Route path="/catalogs/:id" element={<Protected><CatalogDetail /></Protected>} />
             <Route path="/categories" element={<Protected roles={["admin", "manager"]}><Categories /></Protected>} />
