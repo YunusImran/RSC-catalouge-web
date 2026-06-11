@@ -1,0 +1,122 @@
+{
+  "theme": "Light",
+  "archetype": "Organic & Earthy / Enterprise Swiss",
+  "typography": {
+    "fonts": {
+      "headings": "Cabinet Grotesk",
+      "body": "IBM Plex Sans",
+      "mono": "JetBrains Mono"
+    },
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl font-black tracking-tight",
+      "h2": "text-2xl sm:text-3xl font-bold tracking-tight",
+      "h3": "text-xl font-semibold",
+      "h4": "text-lg font-medium",
+      "body": "text-base leading-relaxed",
+      "small": "text-sm",
+      "label": "text-xs font-semibold tracking-[0.1em] uppercase"
+    },
+    "rules": [
+      "Use 'Cabinet Grotesk' for all headings and metrics/numbers in the dashboard.",
+      "Use 'IBM Plex Sans' for body text, data tables, and input fields.",
+      "Use 'JetBrains Mono' for barcode data and SKU numbers to ensure exact alignment.",
+      "Ensure minimum 4.5:1 contrast ratio for all text.",
+      "Labels over inputs and tables must be uppercase with wide tracking."
+    ]
+  },
+  "colors": {
+    "palette": {
+      "primary": "hsl(215, 50%, 25%)",
+      "primary_foreground": "hsl(210, 20%, 98%)",
+      "background": "hsl(40, 10%, 98%)",
+      "foreground": "hsl(220, 25%, 15%)",
+      "card": "hsl(0, 0%, 100%)",
+      "card_foreground": "hsl(220, 25%, 15%)",
+      "border": "hsl(220, 15%, 90%)",
+      "muted": "hsl(40, 10%, 92%)",
+      "muted_foreground": "hsl(220, 10%, 45%)",
+      "accent": "hsl(15, 60%, 50%)",
+      "accent_foreground": "hsl(0, 0%, 100%)",
+      "destructive": "hsl(0, 70%, 50%)",
+      "success": "hsl(150, 40%, 40%)",
+      "warning": "hsl(35, 80%, 50%)"
+    },
+    "description": "A fabric/textile-inspired enterprise palette. 'Deep Denim' blue acts as the primary structure color, conveying trust and inventory management solidity. The background is a 'Raw Cotton' warm off-white, preventing the clinical feel of pure white. Accents use 'Terracotta' and 'Sage Green' for status indicators (overdue, issued, returned).",
+    "dark_mode": {
+      "background": "hsl(220, 25%, 10%)",
+      "foreground": "hsl(40, 10%, 95%)",
+      "card": "hsl(220, 25%, 13%)",
+      "border": "hsl(220, 20%, 20%)"
+    }
+  },
+  "layout_spacing": {
+    "grid_system": {
+      "dashboard": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6",
+      "forms": "grid-cols-1 md:grid-cols-2 gap-8"
+    },
+    "spacing_scale": "Use generous Tailwind spacing: p-6 for default cards, p-8 for major layout sections.",
+    "surfaces": "Use flat solid surfaces with crisp 1px borders (border-border). No soft drop-shadows. Use strict geometric shapes to emulate an enterprise ERP feel, avoiding heavy glassmorphism."
+  },
+  "components": {
+    "buttons": "Flat, unshadowed. Primary buttons use Deep Denim (bg-primary text-primary-foreground) with slight hover opacity reduction. Use data-testid attributes for all.",
+    "tables": "Dense, data-heavy design. Use 'SaaSFrame' patterns: sticky headers, horizontal scrolling for overflow, subtle 1px border between rows. Row height: condensed (40px) or standard (48px). Incorporate inline action menus (Shadcn DropdownMenu) at the end of rows.",
+    "cards": "Cardless aesthetic where possible, or strictly flat cards with 1px border. Internal padding must be p-6. For metric cards, put the value in Cabinet Grotesk font-black.",
+    "forms": "Use Shadcn inputs, selects, and textareas. Labels must be uppercase 'label' typography. Use grid layouts for multi-field forms (e.g., Add Catalog).",
+    "badges": "Use rounded-full px-2.5 py-0.5 text-xs font-semibold. Statuses: Available (Sage Green), Issued (Blue), Overdue/Damaged (Terracotta).",
+    "sidebar": "Fixed left sidebar (w-64) with dense, hierarchical navigation. Active states get a left border highlight (border-l-4 border-primary bg-muted/50)."
+  },
+  "motion": {
+    "transitions": "Keep animations minimal. Use smooth hover state transitions (transition-colors duration-200). Use subtle stagger for dashboard cards on load.",
+    "rules": "Respect prefers-reduced-motion."
+  },
+  "icons": {
+    "library": "@phosphor-icons/react",
+    "style": "Use 'regular' weight for UI, 'duotone' for large dashboard metric icons.",
+    "installation": "yarn add @phosphor-icons/react"
+  },
+  "media": {
+    "swatches": [
+      {
+        "url": "https://images.unsplash.com/photo-1633655442330-0b44ca0cce9b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzOTB8MHwxfHNlYXJjaHw0fHxmYWJyaWMlMjBzd2F0Y2hlc3xlbnwwfHx8fDE3ODExODMxMTF8MA&ixlib=rb-4.1.0&q=85",
+        "category": "catalog_image",
+        "description": "Linen swatch stack"
+      },
+      {
+        "url": "https://images.pexels.com/photos/31778601/pexels-photo-31778601.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "category": "catalog_image",
+        "description": "Blue fabric swatches"
+      },
+      {
+        "url": "https://images.pexels.com/photos/7147552/pexels-photo-7147552.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "category": "catalog_image",
+        "description": "Ornamental fabric samples"
+      }
+    ],
+    "avatars": [
+      {
+        "url": "https://images.unsplash.com/photo-1740252117044-2af197eea287?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NTZ8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBwcm9maWxlJTIwYXZhdGFyfGVufDB8fHx8MTc4MTE4MzA5N3ww&ixlib=rb-4.1.0&q=85",
+        "category": "user_avatar",
+        "description": "User profile avatar"
+      }
+    ],
+    "backgrounds": [
+      {
+        "url": "https://images.unsplash.com/photo-1588610992315-5654831ceebd?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MTJ8MHwxfHNlYXJjaHwzfHxmYWJyaWMlMjB0ZXh0dXJlJTIwdGV4dGlsZSUyMGxpbmVufGVufDB8fHx8MTc4MTE4MzA5N3ww&ixlib=rb-4.1.0&q=85",
+        "category": "login_background",
+        "description": "White textile background for auth pages"
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Ensure Tailwind config is updated with the custom colors provided.",
+    "Do not use generic 'blue-500' or 'gray-100'. Use the HSL CSS variables from the color palette.",
+    "Implement Cabinet Grotesk and IBM Plex Sans fonts via CDN or standard imports.",
+    "Build the dashboard using a dense, enterprise SaaS grid. Avoid excessive white space in tables.",
+    "For the Barcode & QR Code pages, use a monospace font (JetBrains Mono) for the printed codes to ensure technical accuracy and aesthetic fit.",
+    "The UI should feel sharp (no rounded corners beyond rounded-sm) to match the 'Swiss & High-Contrast' structure.",
+    "All interactive elements MUST include data-testid attributes (e.g., data-testid='add-catalog-button').",
+    "Replace Shadcn's default 'Vercel-look' borders with crisp 1px solid borders.",
+    "Use Phosphor Icons for all navigational and UI iconography.",
+    "Implement dark mode correctly, ensuring contrast ratios remain accessible."
+  ]
+}
