@@ -1262,6 +1262,7 @@ async def _issue_rows():
             if cat:
                 item["catalog_code"] = cat.get("catalog_code")
                 item["catalog_name"] = cat.get("catalog_name")
+                item["cat_no"] = cat.get("cat_no", "")
                 if cat.get("supplier_id"):
                     sup = await db.suppliers.find_one({"_id": ObjectId(cat["supplier_id"])})
                     item["supplier_name"] = sup.get("name") if sup else ""
@@ -1289,7 +1290,7 @@ async def report_issues_csv(user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISO
                 "Employee Name", "Mobile", "Issue Date", "Due Date", "Is Overdue",
                 "Is Available", "Issued By", "Status"])
     for r in rows:
-        w.writerow([r.get("transaction_id", ""), r.get("cat_no", "") or r.get("catalog_code", ""),
+        w.writerow([r.get("transaction_id", ""), r.get("cat_no", ""),
                     r.get("catalog_name", ""), r.get("supplier_name", ""),
                     r.get("customer_name", ""), r.get("employee_name", ""), r.get("mobile", ""),
                     (r.get("issue_date") or "")[:10], (r.get("expected_return_date") or "")[:10],
@@ -1307,7 +1308,7 @@ async def report_issues_xlsx(user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVIS
                "Employee Name", "Mobile", "Issue Date", "Due Date", "Is Overdue",
                "Is Available", "Issued By", "Status"])
     for r in rows:
-        ws.append([r.get("transaction_id", ""), r.get("cat_no", "") or r.get("catalog_code", ""),
+        ws.append([r.get("transaction_id", ""), r.get("cat_no", ""),
                    r.get("catalog_name", ""), r.get("supplier_name", ""),
                    r.get("customer_name", ""), r.get("employee_name", ""), r.get("mobile", ""),
                    (r.get("issue_date") or "")[:10], (r.get("expected_return_date") or "")[:10],
@@ -1332,7 +1333,7 @@ async def report_issues_pdf(user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISO
     data = [hdr]
     for r in rows:
         data.append([r.get("transaction_id", ""),
-                     (r.get("cat_no", "") or r.get("catalog_code", ""))[:10],
+                     (r.get("cat_no", "") or "")[:10],
                      (r.get("catalog_name", "") or "")[:18], (r.get("supplier_name", "") or "")[:12],
                      (r.get("customer_name", "") or "")[:12], (r.get("employee_name", "") or "")[:12],
                      r.get("mobile", ""), (r.get("issue_date") or "")[:10],
