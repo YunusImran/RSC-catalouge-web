@@ -1305,8 +1305,8 @@ async def on_startup():
         await db.employees.create_index("name")
         await db.catalog_issues.create_index("expected_return_date")
         await db.catalog_issues.create_index("status")
-        await db.catalog_issues.create_index("transaction_id")
-        await db.catalog_returns.create_index("transaction_id")
+        await db.catalog_issues.create_index("transaction_id", unique=True, sparse=True)
+        await db.catalog_returns.create_index("transaction_id", unique=True, sparse=True)
     except Exception as e:
         log.warning(f"Index setup: {e}")
 

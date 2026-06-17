@@ -68,7 +68,10 @@ export default function AppLayout({ children }) {
                 </nav>
                 <div className="border-t border-border p-4 space-y-2">
                     <div className="text-xs label-uppercase">Signed in as</div>
-                    <div className="text-sm font-medium truncate" data-testid="current-user-email">{user?.email}</div>
+                    <div className="text-sm font-medium truncate" data-testid="current-username">{user?.username || user?.email}</div>
+                    {user?.email && user?.username && (
+                        <div className="text-[10px] text-muted-foreground truncate">{user.email}</div>
+                    )}
                     <div className="text-[10px] uppercase tracking-wider text-accent">{user?.role}</div>
                 </div>
             </aside>
