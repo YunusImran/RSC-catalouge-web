@@ -245,6 +245,18 @@ class IssueIn(BaseModel):
     expected_return_date: Optional[str] = None
     remarks: Optional[str] = ""
 
+class BatchIssueIn(BaseModel):
+    catalog_ids: list[str]                  # one or more catalogs to issue together
+    customer_name: Optional[str] = ""
+    employee_id: Optional[str] = None
+    employee_name: Optional[str] = ""
+    department: Optional[str] = ""
+    mobile: str
+    email: Optional[str] = ""
+    issue_date: Optional[str] = None
+    expected_return_date: Optional[str] = None
+    remarks: Optional[str] = ""
+
 class ReturnIn(BaseModel):
     catalog_id: str
     returned_by: Optional[str] = ""
@@ -857,6 +869,80 @@ async def create_issue(body: IssueIn, request: Request, user=Depends(get_current
     return doc
 
 
+@api.post("/issues/batch")
+async def create_batch_issue(body: BatchIssueIn, request: Request, user=Depends(get_current_user)):
+    """Issue MULTIPLE catalogs in one go — all share the SAME transaction_id."""
+    if not body.mobile or not MOBILE_RE.match(body.mobile.strip()):
+        raise HTTPException(status_code=400, detail="Valid mobile number is required")
+    if not body.catalog_ids:
+        raise HTTPException(status_code=400, detail="At least one catalog is required")
+
+    # Validate all catalogs first (fail-fast - don't half-issue)
+    cats = []
+    for cid in body.catalog_ids:
+        try:
+            cat = await db.catalogs.find_one({"_id": ObjectId(cid)})
+        except Exception:
+            raise HTTPException(404, f"Invalid catalog id: {cid}")
+        if not cat:
+            raise HTTPException(404, f"Catalog not found: {cid}")
+        if cat.get("is_archived"):
+            raise HTTPException(400, f"{cat.get('catalog_code')} is archived")
+        if cat.get("status") == "Issued":
+            raise HTTPException(400, f"{cat.get('catalog_code')} is already issued")
+        cats.append(cat)
+
+    # Resolve employee
+    employee_name = body.employee_name or ""
+    if body.employee_id:
+        emp = await db.employees.find_one({"_id": ObjectId(body.employee_id)})
+        if emp:
+            employee_name = emp.get("name", employee_name)
+
+    # ONE shared transaction id for the whole batch
+    txn = await next_transaction_id()
+    issue_date = body.issue_date or iso(now())
+    now_iso = iso(now())
+    inserted_issues = []
+
+    for cat in cats:
+        doc = {
+            "transaction_id": txn,
+            "catalog_id": str(cat["_id"]),
+            "customer_name": body.customer_name,
+            "employee_id": body.employee_id,
+            "employee_name": employee_name,
+            "department": body.department,
+            "mobile": body.mobile,
+            "email": body.email,
+            "issue_date": issue_date,
+            "expected_return_date": body.expected_return_date,
+            "remarks": body.remarks,
+            "status": "Active",
+            "issued_by": user.get("name") or user.get("username") or user["email"],
+            "issued_by_email": user["email"],
+            "created_at": now_iso,
+            "batch": True,
+        }
+        try:
+            res = await db.catalog_issues.insert_one(doc)
+        except Exception as e:
+            # Unique constraint on transaction_id is sparse so multiple rows with the SAME id
+            # are allowed only if the index isn't unique. We added unique=True earlier — drop it
+            # for batch support. Treat as soft failure.
+            raise HTTPException(500, f"Could not insert issue for {cat['catalog_code']}: {e}")
+        await db.catalogs.update_one({"_id": cat["_id"]},
+                                     {"$set": {"status": "Issued", "updated_at": now_iso}})
+        doc["id"] = str(res.inserted_id); doc.pop("_id", None)
+        inserted_issues.append(doc)
+
+    codes = ", ".join(c.get("catalog_code", "?") for c in cats)
+    await audit(user, "catalog_issued_batch",
+                f"{txn} · {len(cats)} catalogs issued to {body.customer_name or employee_name} ({body.mobile}): {codes}",
+                request, txn)
+    return {"transaction_id": txn, "issued": inserted_issues, "count": len(inserted_issues)}
+
+
 @api.get("/returns")
 async def list_returns(user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
     rows = await db.catalog_returns.find({}).sort("created_at", -1).to_list(1000)
@@ -1194,13 +1280,13 @@ async def _issue_rows():
 async def report_issues_csv(user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
     rows = await _issue_rows()
     buf = io.StringIO(); w = csv.writer(buf)
-    w.writerow(["Txn ID", "Catalog Code", "Catalog Name", "Supplier", "Customer Name",
+    w.writerow(["Txn ID", "Cat No", "Catalog Name", "Supplier", "Customer Name",
                 "Employee Name", "Mobile", "Issue Date", "Due Date", "Is Overdue",
                 "Is Available", "Issued By", "Status"])
     for r in rows:
-        w.writerow([r.get("transaction_id", ""), r.get("catalog_code", ""), r.get("catalog_name", ""),
-                    r.get("supplier_name", ""), r.get("customer_name", ""),
-                    r.get("employee_name", ""), r.get("mobile", ""),
+        w.writerow([r.get("transaction_id", ""), r.get("cat_no", "") or r.get("catalog_code", ""),
+                    r.get("catalog_name", ""), r.get("supplier_name", ""),
+                    r.get("customer_name", ""), r.get("employee_name", ""), r.get("mobile", ""),
                     (r.get("issue_date") or "")[:10], (r.get("expected_return_date") or "")[:10],
                     r.get("is_overdue", ""), r.get("is_available", ""),
                     r.get("issued_by", ""), r.get("status", "")])
@@ -1212,13 +1298,13 @@ async def report_issues_csv(user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISO
 async def report_issues_xlsx(user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
     rows = await _issue_rows()
     wb = Workbook(); ws = wb.active; ws.title = "Issues"
-    ws.append(["Txn ID", "Catalog Code", "Catalog Name", "Supplier", "Customer Name",
+    ws.append(["Txn ID", "Cat No", "Catalog Name", "Supplier", "Customer Name",
                "Employee Name", "Mobile", "Issue Date", "Due Date", "Is Overdue",
                "Is Available", "Issued By", "Status"])
     for r in rows:
-        ws.append([r.get("transaction_id", ""), r.get("catalog_code", ""), r.get("catalog_name", ""),
-                   r.get("supplier_name", ""), r.get("customer_name", ""),
-                   r.get("employee_name", ""), r.get("mobile", ""),
+        ws.append([r.get("transaction_id", ""), r.get("cat_no", "") or r.get("catalog_code", ""),
+                   r.get("catalog_name", ""), r.get("supplier_name", ""),
+                   r.get("customer_name", ""), r.get("employee_name", ""), r.get("mobile", ""),
                    (r.get("issue_date") or "")[:10], (r.get("expected_return_date") or "")[:10],
                    r.get("is_overdue", ""), r.get("is_available", ""),
                    r.get("issued_by", ""), r.get("status", "")])
@@ -1236,11 +1322,12 @@ async def report_issues_pdf(user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISO
     story = [Paragraph("Royal Shades — Issue Report", styles["Title"]),
              Paragraph(f"Generated: {now().strftime('%Y-%m-%d %H:%M UTC')}", styles["Normal"]),
              Spacer(1, 12)]
-    hdr = ["Txn ID", "Code", "Catalog", "Supplier", "Customer", "Employee",
+    hdr = ["Txn ID", "Cat No", "Catalog", "Supplier", "Customer", "Employee",
            "Mobile", "Issue", "Due", "Overdue", "Avail", "Status"]
     data = [hdr]
     for r in rows:
-        data.append([r.get("transaction_id", ""), r.get("catalog_code", "")[:8],
+        data.append([r.get("transaction_id", ""),
+                     (r.get("cat_no", "") or r.get("catalog_code", ""))[:10],
                      (r.get("catalog_name", "") or "")[:18], (r.get("supplier_name", "") or "")[:12],
                      (r.get("customer_name", "") or "")[:12], (r.get("employee_name", "") or "")[:12],
                      r.get("mobile", ""), (r.get("issue_date") or "")[:10],
@@ -1305,7 +1392,16 @@ async def on_startup():
         await db.employees.create_index("name")
         await db.catalog_issues.create_index("expected_return_date")
         await db.catalog_issues.create_index("status")
-        await db.catalog_issues.create_index("transaction_id", unique=True, sparse=True)
+        # transaction_id is NOT unique on issues because batch-issues share one txn id
+        try:
+            await db.catalog_issues.drop_index("transaction_id_1")
+        except Exception:
+            pass
+        await db.catalog_issues.create_index("transaction_id")
+        try:
+            await db.catalog_returns.drop_index("transaction_id_1")
+        except Exception:
+            pass
         await db.catalog_returns.create_index("transaction_id", unique=True, sparse=True)
     except Exception as e:
         log.warning(f"Index setup: {e}")

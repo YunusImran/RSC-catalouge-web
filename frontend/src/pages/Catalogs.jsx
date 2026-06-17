@@ -31,16 +31,21 @@ export default function Catalogs() {
     const [open, setOpen] = useState(false);
     const [editing, setEditing] = useState(null);
     const [importOpen, setImportOpen] = useState(false);
+    const [pageSize, setPageSize] = useState(50);
+    const [page, setPage] = useState(0);   // zero-indexed
 
     const load = useCallback(async () => {
-        const params = { include_archived: includeArchived };
+        const params = { include_archived: includeArchived, skip: page * pageSize, limit: pageSize };
         if (q) params.q = q;
         if (status !== "all") params.status = status;
         if (categoryId !== "all") params.category_id = categoryId;
         if (supplierId !== "all") params.supplier_id = supplierId;
         const { data } = await api.get("/catalogs", { params });
         setItems(data.items); setTotal(data.total);
-    }, [q, status, categoryId, supplierId, includeArchived]);
+    }, [q, status, categoryId, supplierId, includeArchived, page, pageSize]);
+
+    // Reset to page 0 when any filter changes (but not when page changes)
+    useEffect(() => { setPage(0); }, [q, status, categoryId, supplierId, includeArchived, pageSize]);
 
     useEffect(() => {
         api.get("/categories").then(({ data }) => setCategories(data));
@@ -159,7 +164,35 @@ export default function Catalogs() {
                         </tbody>
                     </table>
                 </div>
-                <div className="px-4 py-3 border-t border-border text-xs text-muted-foreground">Showing {items.length} of {total}</div>
+                <div className="px-4 py-3 border-t border-border flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
+                    <div data-testid="pagination-info">
+                        Showing <span className="font-mono">{total === 0 ? 0 : page * pageSize + 1}</span>–
+                        <span className="font-mono">{Math.min((page + 1) * pageSize, total)}</span> of
+                        <span className="font-mono"> {total}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <span className="label-uppercase">Rows</span>
+                        <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
+                            <SelectTrigger className="w-20 h-8" data-testid="page-size-select"><SelectValue /></SelectTrigger>
+                            <SelectContent>
+                                <SelectItem value="50">50</SelectItem>
+                                <SelectItem value="100">100</SelectItem>
+                                <SelectItem value="200">200</SelectItem>
+                                <SelectItem value="500">500</SelectItem>
+                                <SelectItem value="1500">All</SelectItem>
+                            </SelectContent>
+                        </Select>
+                        <Button size="sm" variant="outline" disabled={page === 0}
+                                onClick={() => setPage(0)} data-testid="page-first">«</Button>
+                        <Button size="sm" variant="outline" disabled={page === 0}
+                                onClick={() => setPage((p) => Math.max(0, p - 1))} data-testid="page-prev">‹ Prev</Button>
+                        <span className="font-mono">Page {page + 1} / {Math.max(1, Math.ceil(total / pageSize))}</span>
+                        <Button size="sm" variant="outline" disabled={(page + 1) * pageSize >= total}
+                                onClick={() => setPage((p) => p + 1)} data-testid="page-next">Next ›</Button>
+                        <Button size="sm" variant="outline" disabled={(page + 1) * pageSize >= total}
+                                onClick={() => setPage(Math.max(0, Math.ceil(total / pageSize) - 1))} data-testid="page-last">»</Button>
+                    </div>
+                </div>
             </Card>
 
             <CatalogFormDialog
