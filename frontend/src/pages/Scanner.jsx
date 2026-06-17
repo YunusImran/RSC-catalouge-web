@@ -112,11 +112,22 @@ export default function Scanner() {
     const stopCamera = async () => {
         try {
             if (scannerRef.current) {
-                const isScanning = scannerRef.current.getState && scannerRef.current.getState() === 2;
-                if (isScanning) await scannerRef.current.stop();
-                await scannerRef.current.clear();
+                // Html5Qrcode states: NOT_STARTED=1, SCANNING=2, PAUSED=3
+                const state = scannerRef.current.getState && scannerRef.current.getState();
+                if (state === 2 || state === 3) {
+                    await scannerRef.current.stop();
+                }
+                try { scannerRef.current.clear(); } catch (_) {}
             }
         } catch (_) {}
+        // Manually wipe whatever html5-qrcode injected so a future React render
+        // doesn't try to remove nodes it doesn't own.
+        const region = document.getElementById("camera-region");
+        if (region) {
+            while (region.firstChild) {
+                try { region.removeChild(region.firstChild); } catch (_) { break; }
+            }
+        }
         scannerRef.current = null;
         setCameraOn(false);
     };
@@ -187,9 +198,14 @@ export default function Scanner() {
                         </div>
                     )}
 
-                    <div id="camera-region"
-                         className="w-full bg-muted rounded-sm overflow-hidden mb-4 aspect-video grid place-items-center">
-                        {!cameraOn && <span className="text-xs text-muted-foreground">Camera off</span>}
+                    <div className="relative w-full bg-muted rounded-sm overflow-hidden mb-4 aspect-video">
+                        {/* This div is MANAGED BY html5-qrcode — React must never touch its children */}
+                        <div id="camera-region" className="absolute inset-0" />
+                        {!cameraOn && (
+                            <div className="absolute inset-0 grid place-items-center pointer-events-none">
+                                <span className="text-xs text-muted-foreground">Camera off</span>
+                            </div>
+                        )}
                     </div>
 
                     {cameraError && (
