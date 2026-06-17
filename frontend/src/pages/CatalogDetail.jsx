@@ -28,21 +28,15 @@ export default function CatalogDetail() {
 
     const reload = async () => {
         try {
-            const { data } = await api.get(`/catalogs/${id}`);
-            // enrich with supplier name client-side
-            if (data.supplier_id) {
-                try {
-                    const sups = await api.get(`/suppliers`);
-                    const sup = sups.data.find((s) => s.id === data.supplier_id);
-                    data.supplier_name = sup ? sup.name : "";
-                } catch (_) {}
-            }
-            setCatalog(data);
-            const h = await api.get(`/catalogs/${id}/history`);
-            setHistory(h.data);
-            const bc = await api.get(`/catalogs/${id}/barcode.svg`, { responseType: "text" });
-            setBarcodeSvg(bc.data);
-            if (data.qr_value) {
+            const [catRes, histRes, bcRes] = await Promise.all([
+                api.get(`/catalogs/${id}`),
+                api.get(`/catalogs/${id}/history`),
+                api.get(`/catalogs/${id}/barcode.svg`, { responseType: "text" }),
+            ]);
+            setCatalog(catRes.data);
+            setHistory(histRes.data);
+            setBarcodeSvg(bcRes.data);
+            if (catRes.data.qr_value) {
                 try {
                     const qr = await api.get(`/catalogs/${id}/qr.svg`, { responseType: "text" });
                     setQrSvg(qr.data);

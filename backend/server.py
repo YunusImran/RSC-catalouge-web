@@ -593,7 +593,12 @@ async def get_catalog(cid: str, user=Depends(get_current_user)):
     doc = await db.catalogs.find_one({"_id": ObjectId(cid)})
     if not doc:
         raise HTTPException(404, "Not found")
-    return strip_buying_price(doc_to_json(doc), user["role"])
+    out = doc_to_json(doc)
+    # enrich with supplier name inline (saves a frontend round-trip)
+    if doc.get("supplier_id"):
+        sup = await db.suppliers.find_one({"_id": ObjectId(doc["supplier_id"])})
+        out["supplier_name"] = sup.get("name") if sup else ""
+    return strip_buying_price(out, user["role"])
 
 @api.post("/catalogs")
 async def create_catalog(body: CatalogIn, request: Request, user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
