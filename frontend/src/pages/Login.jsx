@@ -31,14 +31,14 @@ export default function Login() {
                 <div className="bg-card/95 backdrop-blur-xl border border-white/10 rounded-sm shadow-2xl p-8 sm:p-10">
                     <div className="text-center space-y-4 mb-8">
                         <div className="inline-flex items-center justify-center w-36 h-36 sm:w-40 sm:h-40 bg-white rounded-sm shadow-sm border border-border p-3 mx-auto">
-                            <img src="/rsc-logo.png" alt="Royal Shades Curtains LLC Dubai"
+                            <img src="/rsc-logo.png" alt="Royal Shade Curtain LLC"
                                  className="w-full h-full object-contain" data-testid="company-logo" />
                         </div>
                         <div className="space-y-1">
                             <h1 className="font-display font-black text-xl sm:text-2xl tracking-tight" data-testid="company-name">
-                                Royal Shades Curtains LLC
+                                Royal Shade Curtain LLC
                             </h1>
-                            <div className="text-[10px] sm:text-xs tracking-[0.35em] uppercase text-muted-foreground">Dubai · UAE</div>
+                            <div className="text-[10px] sm:text-xs tracking-[0.35em] uppercase text-muted-foreground">U·A·E</div>
                         </div>
                     </div>
 

@@ -78,7 +78,7 @@ export default function AppLayout({ children }) {
 
             <main className="flex-1 flex flex-col min-w-0">
                 <header className="h-16 border-b border-border bg-card flex items-center justify-between px-4 md:px-8">
-                    <div className="text-xs label-uppercase">Royal Shades Curtains LLC · Dubai</div>
+                    <div className="text-xs label-uppercase">Royal Shade Curtain LLC</div>
                     <div className="flex items-center gap-2">
                         <Button variant="ghost" size="icon" onClick={toggleTheme} data-testid="theme-toggle">
                             {dark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
