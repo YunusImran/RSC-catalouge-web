@@ -1286,7 +1286,7 @@ async def _issue_rows():
 async def report_issues_csv(user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
     rows = await _issue_rows()
     buf = io.StringIO(); w = csv.writer(buf)
-    w.writerow(["Txn ID", "Cat No", "Catalog Name", "Supplier", "Customer Name",
+    w.writerow(["Txn ID", "Catalogue Number", "Catalog Name", "Supplier", "Customer Name",
                 "Employee Name", "Mobile", "Issue Date", "Due Date", "Is Overdue",
                 "Is Available", "Issued By", "Status"])
     for r in rows:
@@ -1304,7 +1304,7 @@ async def report_issues_csv(user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISO
 async def report_issues_xlsx(user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
     rows = await _issue_rows()
     wb = Workbook(); ws = wb.active; ws.title = "Issues"
-    ws.append(["Txn ID", "Cat No", "Catalog Name", "Supplier", "Customer Name",
+    ws.append(["Txn ID", "Catalogue Number", "Catalog Name", "Supplier", "Customer Name",
                "Employee Name", "Mobile", "Issue Date", "Due Date", "Is Overdue",
                "Is Available", "Issued By", "Status"])
     for r in rows:
@@ -1328,7 +1328,7 @@ async def report_issues_pdf(user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISO
     story = [Paragraph("Royal Shades — Issue Report", styles["Title"]),
              Paragraph(f"Generated: {now().strftime('%Y-%m-%d %H:%M UTC')}", styles["Normal"]),
              Spacer(1, 12)]
-    hdr = ["Txn ID", "Cat No", "Catalog", "Supplier", "Customer", "Employee",
+    hdr = ["Txn ID", "Catalogue Number", "Catalog", "Supplier", "Customer", "Employee",
            "Mobile", "Issue", "Due", "Overdue", "Avail", "Status"]
     data = [hdr]
     for r in rows:
