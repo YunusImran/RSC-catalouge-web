@@ -54,8 +54,8 @@ export default function Scanner() {
 
     const addToBasket = async (value) => {
         if (!value) return;
-        if (action !== "Issue") {
-            // Default behavior — search/view/return = open the catalog
+        if (action === "Search" || action === "View") {
+            // Default behavior — search/view = open the catalog
             try {
                 const { data } = await api.post("/scans", { barcode_value: value, action, device_type: cameraOn ? "Camera" : "USB/Manual" });
                 toast.success(`Found: ${data.catalog.catalog_name}`);
@@ -63,8 +63,22 @@ export default function Scanner() {
             } catch (e) { toast.error(apiError(e)); }
             return;
         }
-        // ISSUE action — add to batch basket
-        if (basket.some((b) => b.id === value || b.catalog_code === value || b.qr_value === value)) {
+        if (action === "Issue Single") {
+            // Look up and jump straight to catalog detail (the Issue button is there)
+            try {
+                const { data } = await api.post("/scans", { barcode_value: value, action: "Issue", device_type: cameraOn ? "Camera" : "USB/Manual" });
+                const cat = data.catalog;
+                if (cat.status === "Issued") {
+                    toast.error(`${cat.catalog_code} is already issued`);
+                    return;
+                }
+                toast.success(`Opening ${cat.catalog_name} — click Issue`);
+                navigate(`/catalogs/${cat.id}`);
+            } catch (e) { toast.error(apiError(e)); }
+            return;
+        }
+        // Issue Batch — add to basket
+        if (basket.some((b) => b.id === value || b.catalog_code === value)) {
             toast.info("Already in basket");
             return;
         }
@@ -138,7 +152,8 @@ export default function Scanner() {
                 { fps: 10, qrbox: { width: 250, height: 250 } },
                 (decoded) => {
                     addToBasket(decoded);
-                    if (action !== "Issue") stopCamera(); // for non-issue, stop after one scan
+                    // Keep camera on for Issue Batch (scan many); stop for others
+                    if (action !== "Issue Batch") stopCamera();
                 },
                 () => {}
             );
@@ -174,7 +189,7 @@ export default function Scanner() {
         setTimeout(() => inputRef.current?.focus(), 50);
     };
 
-    const isIssueMode = action === "Issue";
+    const isIssueMode = action === "Issue Batch";
 
     return (
         <div>
@@ -198,17 +213,18 @@ export default function Scanner() {
                         </div>
                         <div>
                             <Label className="label-uppercase">Action</Label>
-                            <Select value={action} onValueChange={(v) => { setAction(v); if (v !== "Issue") setBasket([]); }}>
+                            <Select value={action} onValueChange={(v) => { setAction(v); if (v !== "Issue Batch") setBasket([]); }}>
                                 <SelectTrigger data-testid="scanner-action-select"><SelectValue /></SelectTrigger>
                                 <SelectContent>
-                                    <SelectItem value="Search">Search</SelectItem>
-                                    <SelectItem value="View">View</SelectItem>
-                                    <SelectItem value="Issue">Issue (batch — same customer, same Txn ID)</SelectItem>
+                                    <SelectItem value="Search">Search · open catalog</SelectItem>
+                                    <SelectItem value="View">View · open catalog</SelectItem>
+                                    <SelectItem value="Issue Single">Issue Single · scan one → opens issue form</SelectItem>
+                                    <SelectItem value="Issue Batch">Issue Batch · scan many, one shared Txn ID</SelectItem>
                                 </SelectContent>
                             </Select>
                         </div>
                         <Button type="submit" className="w-full" data-testid="scanner-submit-btn">
-                            {isIssueMode ? "Add to Basket" : "Scan"}
+                            {isIssueMode ? "Add to Basket" : (action === "Issue Single" ? "Open & Issue" : "Scan")}
                         </Button>
                     </form>
 
@@ -338,9 +354,17 @@ export default function Scanner() {
                     <Card className="p-8 surface-card rounded-sm bg-muted/20 border-dashed">
                         <div className="text-center text-muted-foreground space-y-2">
                             <ScanLine className="w-10 h-10 mx-auto opacity-50" />
-                            <div className="font-display font-bold text-lg">Quick scan mode</div>
-                            <p className="text-sm">In Search/View mode, scanning opens the catalog directly.</p>
-                            <p className="text-xs">Switch action to <b>Issue</b> to scan multiple catalogs to the same customer with one shared Txn ID.</p>
+                            <div className="font-display font-bold text-lg">
+                                {action === "Issue Single" ? "Issue Single" : "Quick scan mode"}
+                            </div>
+                            {action === "Issue Single" ? (
+                                <p className="text-sm">Scan or type one catalog code → it opens the catalog page where you can click <b>Issue</b> to fill customer details and confirm. Each issue gets its own Txn ID.</p>
+                            ) : (
+                                <p className="text-sm">Search/View opens the catalog directly.</p>
+                            )}
+                            <p className="text-xs">
+                                Switch to <b>Issue Batch</b> to scan many catalogs to the same customer with one shared Txn ID.
+                            </p>
                         </div>
                     </Card>
                 )}
