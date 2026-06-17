@@ -1,0 +1,50 @@
+{
+  "summary": "Iteration 4 — Royal Shades v2.1 fully verified. Backend: 24/24 PASS in test_rsc_v2_1.py covering (a) username-based login + email fallback + duplicate-username 400, (b) register with username creates working user, (c) 1316 catalogs in DB / 100 suppliers, (d) search by name (INFINITY) and by cat_no (BX-440A->HANGER), (e) catalog items expose cat_no/quantity/supplier_id, (f) staff hidden buying_price / admin sees it, (g) PATCH RBAC (staff 403, supervisor 403, admin 200), (h) CRITICAL FIX verified: issue->return->catalog status=Available->re-issue same catalog succeeds with new TXN, (i) every POST /api/issues AND /api/returns returns transaction_id matching ^TXN-\\d{4,}$ with monotonic counter, (j) GET /api/issues items include transaction_id, supplier_name, cat_no, catalog_code, catalog_name, (k) dashboard totals include due_today/due_week/overdue/issued/returned (returned>=1 after a return), (l) reports/issues CSV has all 13 required columns, XLSX returns PK zip, PDF returns %PDF, (m) /api/reports/employee-wise returns rows with employee_name/total_issues/active/returned, (n) scans for RSC-00001 return catalog, ZZZZ-NOPE 404, (o) returns RBAC staff 403 / supervisor 200. Frontend smoke (admin): Login page shows 'Royal Shades Curtains LLC' (NO 'And') and 2 inputs (Username + Password). After login top bar shows 'Royal Shades Curtains LLC · Dubai'. Dashboard 4 widgets present; clicking 'Due Today' navigates to /issues-returns?filter=due_today. Catalogs page shows all 9 columns (Code, Cat No, Name, Supplier, Qty, Selling, Buying, Status, Actions); searching 'BX-440A' surfaces HANGER catalog; archive button absent; 'Reset filters' present. Issues/Returns has Txn ID + Supplier columns and TXN-* values. Reports page shows Issue Report card and Catalog Report card each with PDF/Excel/CSV buttons (3 each, 2 cards) plus Employee-wise section. Users page lists username column; Add User dialog has Username field + optional Email + Display Name + Password + Role.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/auth/login", "issue": "Cookies still set with secure=False (carry-over from prior iterations). Low-priority hardening — recommended once site is HTTPS-only in prod."},
+      {"endpoint": "GET /api/catalogs (item shape)", "issue": "supplier_id is returned but supplier_name is NOT included in catalog list items (it's only joined in GET /api/issues items). Frontend currently renders supplier by matching against /api/suppliers; cheap N=1316 lookup table is fine but a precomputed supplier_name on the list response would be cleaner."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Sidebar footer (SIGNED IN AS)", "issues": ["Bottom-left still shows 'admin@fabriccatalog.com' (email). Since v2.1 made login username-based, this should display the username ('admin') first with email secondary, otherwise users will be confused about what identifier to type at login."]},
+      {"screen": "Create User dialog", "issues": ["Console warning: 'Missing Description or aria-describedby={undefined} for DialogContent' — accessibility lint from Radix Dialog. Add a DialogDescription or aria-describedby to silence and improve a11y."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_rsc_v2_1.py",
+    "/app/backend/tests/test_rsc_v2.py",
+    "/app/test_reports/pytest/pytest_v2_1.xml"
+  ],
+  "action_items": [
+    "(Low) Update sidebar 'SIGNED IN AS' block to show username as primary identifier (email secondary).",
+    "(Low) Add DialogDescription/aria-describedby to Create User dialog (and any other DialogContent that triggers the Radix a11y warning).",
+    "(Optional) Include supplier_name on each item in GET /api/catalogs response (currently only supplier_id) to avoid client-side join with /api/suppliers.",
+    "(Carry-over, low) Harden auth cookies with secure=True over HTTPS."
+  ],
+  "critical_code_review_comments": [
+    "server.py is now ~1372 lines (+182 since iter 3). Splitting into modules (auth.py, catalogs.py, issues.py, returns.py, reports.py, dashboard.py, scans.py, employees.py, users.py) is increasingly overdue — testability and maintainability will degrade fast on the next feature.",
+    "Transaction counter (next_transaction_id) — verify atomicity. If implemented via find+update or a counters collection without findOneAndUpdate {upsert:true,returnDocument:'after'} + $inc, concurrent issue/return requests could mint duplicate TXN ids. Recommend a single findOneAndUpdate on a counters doc, and a unique index on transaction_id in catalog_issues and catalog_returns as a safety net.",
+    "Returns endpoint now flips catalog.status to 'Available' (correct behaviour). Make sure to also re-set is_available=true and clear any current_issue_id/customer_name fields stored on the catalog, otherwise reports filtering on Is Available may diverge from status.",
+    "GET /api/reports/issues/{csv,xlsx,pdf} have no role gating in the test — verify ACL: should staff be allowed to download Mobile + Customer Name PII? Recommend admin/supervisor only.",
+    "Employee-wise report aggregation: ensure employees with 0 issues are excluded (or explicitly included with zeros) consistently — current shape unclear from API doc.",
+    "Catalog import auto-creates suppliers/categories silently — already raised in iter 3, still recommended to log into audit and expose in import summary.",
+    "Frontend Login.jsx — confirm `autocomplete='username'` on the username field (browsers will otherwise keep autofilling email)."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_rsc_v2_1.py",
+    "/app/test_reports/iteration_4.json",
+    "/app/test_reports/pytest/pytest_v2_1.xml"
+  ],
+  "success_rate": {"backend": "100% (24/24 in test_rsc_v2_1.py)", "frontend": "100% smoke (login/branding, dashboard widgets+filter nav, catalogs columns+search+no-archive, issues TXN+supplier, reports cards, users dialog username field)"},
+  "test_credentials": "Admin: admin / Admin@123 (also accepts admin@royalshades.ae or admin@fabriccatalog.com as 'username'). Supervisor/staff created with timestamped usernames per pytest session.",
+  "seed_data_creation": "Per-session unique usernames testuser_<ts>, staff_<ts>, sup_<ts>. Created 1-2 RSC-/TST- catalogs via Issue->Return->Re-issue flow. No cleanup required — usernames are unique per run.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "v2.1 backend at 100% (24/24 in test_rsc_v2_1.py). Two suites still useful: test_rsc_v2.py (v2 RBAC + bulk import) and test_rsc_v2_1.py (v2.1 username + CAT NO + TXN + reports). 1316 catalogs imported; RSC-00001 (INFINITY SHEERS I) and RSC-00039 (cat_no BX-440A, name HANGER) are good fixed reference rows. Login by username works AND email fallback works. Dashboard widget click pattern: /issues-returns?filter=<due_today|due_week|overdue|active>. Only minor cosmetic/a11y issues remain.",
+  "rca_of_the_issue": "N/A — all targeted v2.1 changes verified clean. The CRITICAL bug fix (returned catalogs were stuck at status='Returned' and could not be re-issued) is correctly resolved: after POST /api/returns the catalog status is set to 'Available' and the same catalog can immediately be POSTed to /api/issues with a fresh TXN id."
+}

@@ -112,6 +112,17 @@ def strip_buying_price(catalog: dict, role: str) -> dict:
         catalog.pop("buying_price", None)
     return catalog
 
+async def next_transaction_id() -> str:
+    """Returns next sequential transaction ID like TXN-0001 (shared issues+returns)."""
+    from pymongo import ReturnDocument
+    res = await db.counters.find_one_and_update(
+        {"_id": "transactions"},
+        {"$inc": {"value": 1}},
+        upsert=True, return_document=ReturnDocument.AFTER
+    )
+    n = (res or {}).get("value", 1)
+    return f"TXN-{int(n):04d}"
+
 async def get_current_user(request: Request) -> dict:
     token = request.cookies.get("access_token")
     if not token:
@@ -158,11 +169,12 @@ async def audit(user, action, description, request=None, affected=""):
 # Schemas
 # ---------------------------------------------------------------------------
 class LoginIn(BaseModel):
-    email: EmailStr
+    username: str
     password: str
 
 class RegisterIn(BaseModel):
-    email: EmailStr
+    username: str
+    email: Optional[str] = ""
     password: str
     name: str
     role: Literal["admin", "supervisor", "staff"] = "staff"
@@ -203,6 +215,10 @@ class EmployeeIn(BaseModel):
 class CatalogIn(BaseModel):
     catalog_code: str
     catalog_name: str
+    cat_no: Optional[str] = ""
+    quantity: Optional[int] = 1
+    receiving_date: Optional[str] = ""
+    remarks: Optional[str] = ""
     category_id: Optional[str] = None
     supplier_id: Optional[str] = None
     fabric_type: Optional[str] = ""
@@ -212,10 +228,10 @@ class CatalogIn(BaseModel):
     total_swatches: Optional[int] = 0
     description: Optional[str] = ""
     catalog_image: Optional[str] = ""
-    qr_value: Optional[str] = ""        # MANUAL - from Excel or form
+    qr_value: Optional[str] = ""
     buying_price: Optional[float] = None
     selling_price: Optional[float] = None
-    swatch_images: Optional[list] = None  # list of base64 images
+    swatch_images: Optional[list] = None
 
 class IssueIn(BaseModel):
     catalog_id: str
@@ -248,8 +264,8 @@ class ScanIn(BaseModel):
 # ---------------------------------------------------------------------------
 @api.post("/auth/login")
 async def login(body: LoginIn, response: Response, request: Request):
-    email = body.email.lower().strip()
-    identifier = f"email:{email}"
+    username = body.username.lower().strip()
+    identifier = f"user:{username}"
     attempt = await db.login_attempts.find_one({"identifier": identifier})
     if attempt and attempt.get("locked_until"):
         locked_until = datetime.fromisoformat(attempt["locked_until"])
@@ -258,7 +274,8 @@ async def login(body: LoginIn, response: Response, request: Request):
         if locked_until > now():
             raise HTTPException(status_code=429, detail="Too many failed attempts. Try again later.")
 
-    user = await db.users.find_one({"email": email})
+    # match by username OR email (back-compat)
+    user = await db.users.find_one({"$or": [{"username": username}, {"email": username}]})
     if not user or not verify_password(body.password, user["password_hash"]):
         attempts = (attempt.get("count", 0) if attempt else 0) + 1
         update = {"count": attempts, "updated_at": iso(now())}
@@ -267,20 +284,22 @@ async def login(body: LoginIn, response: Response, request: Request):
             update["count"] = 0
         await db.login_attempts.update_one({"identifier": identifier},
                                            {"$set": {"identifier": identifier, **update}}, upsert=True)
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        raise HTTPException(status_code=401, detail="Invalid username or password")
     if not user.get("is_active", True):
         raise HTTPException(status_code=403, detail="Account disabled")
     await db.login_attempts.delete_one({"identifier": identifier})
 
     uid = str(user["_id"])
-    access = create_access_token(uid, email, user["role"])
+    access = create_access_token(uid, user.get("email") or username, user["role"])
     refresh = create_refresh_token(uid)
     set_auth_cookies(response, access, refresh)
     user["id"] = uid
     user.pop("_id"); user.pop("password_hash", None)
-    await db.audit_logs.insert_one({"user_id": uid, "user_email": email, "action": "login",
+    await db.audit_logs.insert_one({"user_id": uid, "user_email": user.get("email", ""),
+                                    "user_name": user.get("name", ""),
+                                    "action": "login",
                                     "description": "User logged in",
-                                    "record_affected": email,
+                                    "record_affected": user.get("username") or user.get("email", ""),
                                     "ip_address": (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
                                                   or (request.client.host if request.client else "n/a"),
                                     "created_at": iso(now())})
@@ -290,13 +309,18 @@ async def login(body: LoginIn, response: Response, request: Request):
 async def register(body: RegisterIn, request: Request, current=Depends(get_current_user)):
     if current["role"] != ROLE_ADMIN:
         raise HTTPException(status_code=403, detail="Only admins can create users")
-    email = body.email.lower().strip()
-    if await db.users.find_one({"email": email}):
+    email = (body.email or "").lower().strip()
+    username = body.username.lower().strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="Username is required")
+    if await db.users.find_one({"username": username}):
+        raise HTTPException(status_code=400, detail="Username already taken")
+    if email and await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="Email already registered")
-    doc = {"email": email, "password_hash": hash_password(body.password),
+    doc = {"username": username, "email": email, "password_hash": hash_password(body.password),
            "name": body.name, "role": body.role, "is_active": True, "created_at": iso(now())}
     res = await db.users.insert_one(doc)
-    await audit(current, "user_created", f"Created user {email} ({body.role})", request, email)
+    await audit(current, "user_created", f"Created user {username} ({body.role})", request, username)
     doc["id"] = str(res.inserted_id); doc.pop("password_hash")
     return doc_to_json(doc)
 
@@ -543,6 +567,7 @@ async def list_catalogs(
         filt["$or"] = [
             {"catalog_code": {"$regex": q, "$options": "i"}},
             {"catalog_name": {"$regex": q, "$options": "i"}},
+            {"cat_no": {"$regex": q, "$options": "i"}},
             {"color": {"$regex": q, "$options": "i"}},
             {"qr_value": {"$regex": q, "$options": "i"}},
         ]
@@ -773,7 +798,7 @@ async def list_issues(filter: Optional[str] = None, user=Depends(get_current_use
     elif filter == "overdue":
         q["status"] = "Active"
         q["expected_return_date"] = {"$lt": today.isoformat(), "$ne": ""}
-    rows = await db.catalog_issues.find(q).sort("created_at", -1).to_list(1000)
+    rows = await db.catalog_issues.find(q).sort("created_at", -1).to_list(2000)
     items = [doc_to_json(d) for d in rows]
     for it in items:
         if it.get("catalog_id"):
@@ -781,6 +806,10 @@ async def list_issues(filter: Optional[str] = None, user=Depends(get_current_use
             if cat:
                 it["catalog_code"] = cat.get("catalog_code")
                 it["catalog_name"] = cat.get("catalog_name")
+                it["cat_no"] = cat.get("cat_no", "")
+                if cat.get("supplier_id"):
+                    sup = await db.suppliers.find_one({"_id": ObjectId(cat["supplier_id"])})
+                    it["supplier_name"] = sup.get("name") if sup else ""
         # compute overdue_days
         if it.get("status") == "Active" and it.get("expected_return_date"):
             try:
@@ -811,16 +840,18 @@ async def create_issue(body: IssueIn, request: Request, user=Depends(get_current
         if emp:
             employee_name = emp.get("name", employee_name)
     doc = body.model_dump()
+    doc["transaction_id"] = await next_transaction_id()
     doc["employee_name"] = employee_name
     doc["status"] = "Active"
-    doc["issued_by"] = user["email"]
+    doc["issued_by"] = user.get("name") or user.get("username") or user["email"]
+    doc["issued_by_email"] = user["email"]
     doc["issue_date"] = doc.get("issue_date") or iso(now())
     doc["created_at"] = iso(now())
     res = await db.catalog_issues.insert_one(doc)
     await db.catalogs.update_one({"_id": ObjectId(body.catalog_id)},
                                  {"$set": {"status": "Issued", "updated_at": iso(now())}})
     await audit(user, "catalog_issued",
-                f"Catalog {cat['catalog_code']} issued to {body.customer_name or employee_name} ({body.mobile})",
+                f"{doc['transaction_id']} · {cat['catalog_code']} issued to {body.customer_name or employee_name} ({body.mobile})",
                 request, cat['catalog_code'])
     doc["id"] = str(res.inserted_id); doc.pop("_id", None)
     return doc
@@ -852,16 +883,19 @@ async def create_return(body: ReturnIn, request: Request, user=Depends(require_r
     if cat.get("status") != "Issued":
         raise HTTPException(400, "Catalog is not currently issued")
     doc = body.model_dump()
+    doc["transaction_id"] = await next_transaction_id()
     doc["return_date"] = doc.get("return_date") or iso(now())
-    doc["received_by"] = user["email"]
+    doc["received_by"] = user.get("name") or user.get("username") or user["email"]
+    doc["received_by_email"] = user["email"]
     doc["created_at"] = iso(now())
     res = await db.catalog_returns.insert_one(doc)
     await db.catalog_issues.update_many({"catalog_id": body.catalog_id, "status": "Active"},
                                         {"$set": {"status": "Returned", "actual_return_date": doc["return_date"]}})
+    # CRITICAL FIX: catalog status returns to 'Available' so it can be re-issued
     await db.catalogs.update_one({"_id": ObjectId(body.catalog_id)},
-                                 {"$set": {"status": "Returned", "updated_at": iso(now())}})
+                                 {"$set": {"status": "Available", "updated_at": iso(now())}})
     await audit(user, "catalog_returned",
-                f"Catalog {cat['catalog_code']} returned ({body.condition})",
+                f"{doc['transaction_id']} · {cat['catalog_code']} returned ({body.condition})",
                 request, cat['catalog_code'])
     doc["id"] = str(res.inserted_id); doc.pop("_id", None)
     return doc
@@ -932,7 +966,8 @@ async def dashboard_stats(user=Depends(get_current_user)):
     total = await db.catalogs.count_documents({"is_archived": {"$ne": True}})
     available = await db.catalogs.count_documents({"status": "Available", "is_archived": {"$ne": True}})
     issued = await db.catalogs.count_documents({"status": "Issued", "is_archived": {"$ne": True}})
-    returned = await db.catalogs.count_documents({"status": "Returned", "is_archived": {"$ne": True}})
+    # 'returned' now means number of completed return transactions (catalogs go back to Available after return)
+    returned = await db.catalog_returns.count_documents({})
     archived = await db.catalogs.count_documents({"is_archived": True})
     suppliers = await db.suppliers.count_documents({"is_archived": {"$ne": True}})
     categories = await db.categories.count_documents({"is_archived": {"$ne": True}})
@@ -1125,9 +1160,125 @@ async def report_catalogs_pdf(status: Optional[str] = None, include_archived: bo
 # ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
+async def _issue_rows():
+    today = now().date()
+    rows = await db.catalog_issues.find({}).sort("created_at", -1).to_list(5000)
+    out = []
+    for it in rows:
+        item = doc_to_json(it)
+        if item.get("catalog_id"):
+            cat = await db.catalogs.find_one({"_id": ObjectId(item["catalog_id"])})
+            if cat:
+                item["catalog_code"] = cat.get("catalog_code")
+                item["catalog_name"] = cat.get("catalog_name")
+                if cat.get("supplier_id"):
+                    sup = await db.suppliers.find_one({"_id": ObjectId(cat["supplier_id"])})
+                    item["supplier_name"] = sup.get("name") if sup else ""
+                else:
+                    item["supplier_name"] = ""
+        # overdue
+        exp = (item.get("expected_return_date") or "")[:10]
+        is_overdue = False
+        if item.get("status") == "Active" and exp:
+            try:
+                due = datetime.fromisoformat(exp).date()
+                is_overdue = today > due
+            except Exception:
+                pass
+        item["is_overdue"] = "Yes" if is_overdue else "No"
+        item["is_available"] = "No" if item.get("status") == "Active" else "Yes"
+        out.append(item)
+    return out
+
+@api.get("/reports/issues/csv")
+async def report_issues_csv(user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
+    rows = await _issue_rows()
+    buf = io.StringIO(); w = csv.writer(buf)
+    w.writerow(["Txn ID", "Catalog Code", "Catalog Name", "Supplier", "Customer Name",
+                "Employee Name", "Mobile", "Issue Date", "Due Date", "Is Overdue",
+                "Is Available", "Issued By", "Status"])
+    for r in rows:
+        w.writerow([r.get("transaction_id", ""), r.get("catalog_code", ""), r.get("catalog_name", ""),
+                    r.get("supplier_name", ""), r.get("customer_name", ""),
+                    r.get("employee_name", ""), r.get("mobile", ""),
+                    (r.get("issue_date") or "")[:10], (r.get("expected_return_date") or "")[:10],
+                    r.get("is_overdue", ""), r.get("is_available", ""),
+                    r.get("issued_by", ""), r.get("status", "")])
+    buf.seek(0)
+    return Response(content=buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=issues_report.csv"})
+
+@api.get("/reports/issues/xlsx")
+async def report_issues_xlsx(user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
+    rows = await _issue_rows()
+    wb = Workbook(); ws = wb.active; ws.title = "Issues"
+    ws.append(["Txn ID", "Catalog Code", "Catalog Name", "Supplier", "Customer Name",
+               "Employee Name", "Mobile", "Issue Date", "Due Date", "Is Overdue",
+               "Is Available", "Issued By", "Status"])
+    for r in rows:
+        ws.append([r.get("transaction_id", ""), r.get("catalog_code", ""), r.get("catalog_name", ""),
+                   r.get("supplier_name", ""), r.get("customer_name", ""),
+                   r.get("employee_name", ""), r.get("mobile", ""),
+                   (r.get("issue_date") or "")[:10], (r.get("expected_return_date") or "")[:10],
+                   r.get("is_overdue", ""), r.get("is_available", ""),
+                   r.get("issued_by", ""), r.get("status", "")])
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    return Response(content=buf.read(),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": "attachment; filename=issues_report.xlsx"})
+
+@api.get("/reports/issues/pdf")
+async def report_issues_pdf(user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
+    rows = await _issue_rows()
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4)
+    styles = getSampleStyleSheet()
+    story = [Paragraph("Royal Shades — Issue Report", styles["Title"]),
+             Paragraph(f"Generated: {now().strftime('%Y-%m-%d %H:%M UTC')}", styles["Normal"]),
+             Spacer(1, 12)]
+    hdr = ["Txn ID", "Code", "Catalog", "Supplier", "Customer", "Employee",
+           "Mobile", "Issue", "Due", "Overdue", "Avail", "Status"]
+    data = [hdr]
+    for r in rows:
+        data.append([r.get("transaction_id", ""), r.get("catalog_code", "")[:8],
+                     (r.get("catalog_name", "") or "")[:18], (r.get("supplier_name", "") or "")[:12],
+                     (r.get("customer_name", "") or "")[:12], (r.get("employee_name", "") or "")[:12],
+                     r.get("mobile", ""), (r.get("issue_date") or "")[:10],
+                     (r.get("expected_return_date") or "")[:10],
+                     r.get("is_overdue", ""), r.get("is_available", ""), r.get("status", "")])
+    t = Table(data, repeatRows=1)
+    t.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1f3a5f")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 7),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.whitesmoke, colors.white]),
+    ]))
+    story.append(t)
+    doc.build(story)
+    buf.seek(0)
+    return Response(content=buf.read(), media_type="application/pdf",
+                    headers={"Content-Disposition": "attachment; filename=issues_report.pdf"})
+
+@api.get("/reports/employee-wise")
+async def report_employee_wise(user=Depends(require_role(ROLE_ADMIN, ROLE_SUPERVISOR))):
+    pipe = [
+        {"$group": {"_id": "$employee_name", "total": {"$sum": 1},
+                    "active": {"$sum": {"$cond": [{"$eq": ["$status", "Active"]}, 1, 0]}},
+                    "returned": {"$sum": {"$cond": [{"$eq": ["$status", "Returned"]}, 1, 0]}}}},
+        {"$sort": {"total": -1}}
+    ]
+    rows = []
+    async for r in db.catalog_issues.aggregate(pipe):
+        rows.append({"employee_name": r["_id"] or "—",
+                     "total_issues": r["total"], "active": r["active"], "returned": r["returned"]})
+    return rows
+
+
 @api.get("/")
 async def root():
-    return {"message": "Royal Shades Catalog API", "version": "2.0"}
+    return {"message": "Royal Shades Catalog API", "version": "2.1"}
 
 
 # ---------------------------------------------------------------------------
@@ -1136,17 +1287,26 @@ async def root():
 @app.on_event("startup")
 async def on_startup():
     try:
-        await db.users.create_index("email", unique=True)
+        # drop legacy unique email index if present (it's now sparse non-unique)
+        try:
+            await db.users.drop_index("email_1")
+        except Exception:
+            pass
+        await db.users.create_index("username", unique=True, sparse=True)
+        await db.users.create_index("email", sparse=True)
         await db.login_attempts.create_index("identifier")
         await db.catalogs.create_index("catalog_code", unique=True)
         await db.catalogs.create_index("barcode_value")
         await db.catalogs.create_index("qr_value")
+        await db.catalogs.create_index("cat_no")
         await db.catalogs.create_index("status")
         await db.scan_history.create_index("created_at")
         await db.audit_logs.create_index("created_at")
         await db.employees.create_index("name")
         await db.catalog_issues.create_index("expected_return_date")
         await db.catalog_issues.create_index("status")
+        await db.catalog_issues.create_index("transaction_id")
+        await db.catalog_returns.create_index("transaction_id")
     except Exception as e:
         log.warning(f"Index setup: {e}")
 
@@ -1155,20 +1315,41 @@ async def on_startup():
     if res.modified_count:
         log.info(f"Migrated {res.modified_count} user(s) from manager → supervisor")
 
-    # Seed admin
+    # Backfill username for users that have email but no username
+    async for u in db.users.find({"username": {"$exists": False}}):
+        email = (u.get("email") or "").lower()
+        if not email:
+            continue
+        base = email.split("@")[0]
+        cand = base
+        i = 0
+        while await db.users.find_one({"username": cand}):
+            i += 1
+            cand = f"{base}{i}"
+        await db.users.update_one({"_id": u["_id"]}, {"$set": {"username": cand}})
+        log.info(f"Backfilled username '{cand}' for {email}")
+
+    # Seed admin (using username 'admin' from ADMIN_USERNAME, plus an email for back-compat)
+    admin_username = os.environ.get("ADMIN_USERNAME", "admin")
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@example.com")
     admin_password = os.environ.get("ADMIN_PASSWORD", "admin123")
-    existing = await db.users.find_one({"email": admin_email})
+    existing = await db.users.find_one({"$or": [{"username": admin_username}, {"email": admin_email}]})
     if not existing:
         await db.users.insert_one({
-            "email": admin_email, "password_hash": hash_password(admin_password),
+            "username": admin_username, "email": admin_email,
+            "password_hash": hash_password(admin_password),
             "name": "System Admin", "role": ROLE_ADMIN, "is_active": True,
             "created_at": iso(now())
         })
-        log.info(f"Seeded admin: {admin_email}")
-    elif not verify_password(admin_password, existing["password_hash"]):
-        await db.users.update_one({"email": admin_email},
-                                  {"$set": {"password_hash": hash_password(admin_password)}})
+        log.info(f"Seeded admin: {admin_username}")
+    else:
+        updates = {}
+        if not existing.get("username"):
+            updates["username"] = admin_username
+        if not verify_password(admin_password, existing["password_hash"]):
+            updates["password_hash"] = hash_password(admin_password)
+        if updates:
+            await db.users.update_one({"_id": existing["_id"]}, {"$set": updates})
 
 @app.on_event("shutdown")
 async def on_shutdown():

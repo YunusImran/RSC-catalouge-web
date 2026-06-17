@@ -105,8 +105,8 @@ export default function Catalogs() {
                             {suppliers.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
                         </SelectContent>
                     </Select>
-                    <Button variant={includeArchived ? "default" : "outline"} onClick={() => setIncludeArchived((v) => !v)} data-testid="toggle-archived">
-                        {includeArchived ? "Hide archived" : "Show archived"}
+                    <Button variant="outline" onClick={() => { setQ(""); setStatus("all"); setCategoryId("all"); setSupplierId("all"); }} data-testid="reset-filters">
+                        Reset filters
                     </Button>
                 </div>
             </Card>
@@ -116,11 +116,11 @@ export default function Catalogs() {
                     <table className="w-full text-sm">
                         <thead className="bg-muted/50">
                             <tr className="text-left">
-                                <th className="px-4 py-3 label-uppercase">Image</th>
                                 <th className="px-4 py-3 label-uppercase">Code</th>
+                                <th className="px-4 py-3 label-uppercase">Cat No</th>
                                 <th className="px-4 py-3 label-uppercase">Name</th>
-                                <th className="px-4 py-3 label-uppercase">Fabric</th>
-                                <th className="px-4 py-3 label-uppercase">Color</th>
+                                <th className="px-4 py-3 label-uppercase">Supplier</th>
+                                <th className="px-4 py-3 label-uppercase">Qty</th>
                                 <th className="px-4 py-3 label-uppercase">Selling</th>
                                 {isAdmin && <th className="px-4 py-3 label-uppercase">Buying</th>}
                                 <th className="px-4 py-3 label-uppercase">Status</th>
@@ -131,41 +131,31 @@ export default function Catalogs() {
                             {items.length === 0 && (
                                 <tr><td colSpan={isAdmin ? 9 : 8} className="px-4 py-10 text-center text-muted-foreground">No catalogs found.</td></tr>
                             )}
-                            {items.map((c) => (
-                                <tr key={c.id} className="border-t border-border hover:bg-muted/30" data-testid={`catalog-row-${c.catalog_code}`}>
-                                    <td className="px-4 py-3">
-                                        {c.catalog_image ?
-                                            <img src={c.catalog_image} alt="" className="w-10 h-10 object-cover rounded-sm border border-border" /> :
-                                            <div className="w-10 h-10 grid place-items-center bg-muted text-muted-foreground rounded-sm"><ImageIcon className="w-4 h-4" /></div>}
-                                    </td>
-                                    <td className="px-4 py-3 font-mono text-xs">{c.catalog_code}</td>
-                                    <td className="px-4 py-3 font-medium">{c.catalog_name}</td>
-                                    <td className="px-4 py-3">{c.fabric_type || "—"}</td>
-                                    <td className="px-4 py-3">{c.color || "—"}</td>
-                                    <td className="px-4 py-3 font-mono">{c.selling_price != null ? `AED ${Number(c.selling_price).toFixed(2)}` : "—"}</td>
-                                    {isAdmin && <td className="px-4 py-3 font-mono text-accent">{c.buying_price != null ? `AED ${Number(c.buying_price).toFixed(2)}` : "—"}</td>}
-                                    <td className="px-4 py-3"><StatusBadge status={c.status} /></td>
-                                    <td className="px-4 py-3 text-right space-x-1 whitespace-nowrap">
-                                        <Button size="sm" variant="ghost" onClick={() => navigate(`/catalogs/${c.id}`)} data-testid={`view-catalog-${c.catalog_code}`}>
-                                            <Eye className="w-4 h-4" />
-                                        </Button>
-                                        {isAdmin && (
-                                            <Button size="sm" variant="ghost" onClick={() => { setEditing(c); setOpen(true); }} data-testid={`edit-catalog-${c.catalog_code}`}>
-                                                <Pencil className="w-4 h-4" />
+                            {items.map((c) => {
+                                const supName = suppliers.find((s) => s.id === c.supplier_id)?.name || "—";
+                                return (
+                                    <tr key={c.id} className="border-t border-border hover:bg-muted/30" data-testid={`catalog-row-${c.catalog_code}`}>
+                                        <td className="px-4 py-3 font-mono text-xs">{c.catalog_code}</td>
+                                        <td className="px-4 py-3 font-mono text-xs">{c.cat_no || "—"}</td>
+                                        <td className="px-4 py-3 font-medium">{c.catalog_name}</td>
+                                        <td className="px-4 py-3">{supName}</td>
+                                        <td className="px-4 py-3">{c.quantity || 1}</td>
+                                        <td className="px-4 py-3 font-mono">{c.selling_price != null ? `AED ${Number(c.selling_price).toFixed(2)}` : "—"}</td>
+                                        {isAdmin && <td className="px-4 py-3 font-mono text-accent">{c.buying_price != null ? `AED ${Number(c.buying_price).toFixed(2)}` : "—"}</td>}
+                                        <td className="px-4 py-3"><StatusBadge status={c.status} /></td>
+                                        <td className="px-4 py-3 text-right space-x-1 whitespace-nowrap">
+                                            <Button size="sm" variant="ghost" onClick={() => navigate(`/catalogs/${c.id}`)} data-testid={`view-catalog-${c.catalog_code}`}>
+                                                <Eye className="w-4 h-4" />
                                             </Button>
-                                        )}
-                                        {canCreate && (
-                                            c.is_archived ?
-                                                <Button size="sm" variant="ghost" onClick={() => restore(c)} data-testid={`restore-catalog-${c.catalog_code}`}>
-                                                    <RotateCcw className="w-4 h-4" />
-                                                </Button> :
-                                                <Button size="sm" variant="ghost" onClick={() => archive(c)} data-testid={`archive-catalog-${c.catalog_code}`}>
-                                                    <Archive className="w-4 h-4" />
+                                            {isAdmin && (
+                                                <Button size="sm" variant="ghost" onClick={() => { setEditing(c); setOpen(true); }} data-testid={`edit-catalog-${c.catalog_code}`}>
+                                                    <Pencil className="w-4 h-4" />
                                                 </Button>
-                                        )}
-                                    </td>
-                                </tr>
-                            ))}
+                                            )}
+                                        </td>
+                                    </tr>
+                                );
+                            })}
                         </tbody>
                     </table>
                 </div>
@@ -184,10 +174,12 @@ export default function Catalogs() {
 
 function CatalogFormDialog({ open, onClose, editing, categories, suppliers, isAdmin, onSaved }) {
     const empty = {
-        catalog_code: "", catalog_name: "", category_id: "", supplier_id: "",
+        catalog_code: "", catalog_name: "", cat_no: "", quantity: 1,
+        category_id: "", supplier_id: "",
         fabric_type: "", material_composition: "", gsm: "", color: "",
         total_swatches: 0, description: "", catalog_image: "",
-        qr_value: "", buying_price: "", selling_price: ""
+        qr_value: "", buying_price: "", selling_price: "",
+        remarks: "", receiving_date: ""
     };
     const [form, setForm] = useState(empty);
     const [saving, setSaving] = useState(false);
@@ -197,6 +189,8 @@ function CatalogFormDialog({ open, onClose, editing, categories, suppliers, isAd
             setForm({
                 catalog_code: editing.catalog_code || "",
                 catalog_name: editing.catalog_name || "",
+                cat_no: editing.cat_no || "",
+                quantity: editing.quantity ?? 1,
                 category_id: editing.category_id || "",
                 supplier_id: editing.supplier_id || "",
                 fabric_type: editing.fabric_type || "",
@@ -209,6 +203,8 @@ function CatalogFormDialog({ open, onClose, editing, categories, suppliers, isAd
                 qr_value: editing.qr_value || "",
                 buying_price: editing.buying_price ?? "",
                 selling_price: editing.selling_price ?? "",
+                remarks: editing.remarks || "",
+                receiving_date: editing.receiving_date || "",
             });
         } else { setForm(empty); }
     }, [editing, open]);
@@ -228,6 +224,7 @@ function CatalogFormDialog({ open, onClose, editing, categories, suppliers, isAd
             ...form,
             gsm: form.gsm !== "" ? Number(form.gsm) : null,
             total_swatches: Number(form.total_swatches) || 0,
+            quantity: Number(form.quantity) || 1,
             buying_price: form.buying_price !== "" ? Number(form.buying_price) : null,
             selling_price: form.selling_price !== "" ? Number(form.selling_price) : null,
         };
@@ -254,6 +251,14 @@ function CatalogFormDialog({ open, onClose, editing, categories, suppliers, isAd
                     <div>
                         <Label className="label-uppercase">Catalog Name *</Label>
                         <Input required value={form.catalog_name} onChange={(e) => setForm({ ...form, catalog_name: e.target.value })} data-testid="catalog-name-input" />
+                    </div>
+                    <div>
+                        <Label className="label-uppercase">Cat No</Label>
+                        <Input value={form.cat_no} onChange={(e) => setForm({ ...form, cat_no: e.target.value })} data-testid="catalog-catno-input" />
+                    </div>
+                    <div>
+                        <Label className="label-uppercase">Quantity</Label>
+                        <Input type="number" min="1" value={form.quantity} onChange={(e) => setForm({ ...form, quantity: e.target.value })} />
                     </div>
                     <div>
                         <Label className="label-uppercase">Category</Label>

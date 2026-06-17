@@ -11,10 +11,12 @@ import { Switch } from "../components/ui/switch";
 import { Plus } from "lucide-react";
 import { toast } from "sonner";
 
+const EMPTY = { username: "", name: "", email: "", password: "", role: "staff" };
+
 export default function Users() {
     const [users, setUsers] = useState([]);
     const [open, setOpen] = useState(false);
-    const [form, setForm] = useState({ email: "", name: "", password: "", role: "staff" });
+    const [form, setForm] = useState(EMPTY);
 
     const load = async () => {
         const { data } = await api.get("/users");
@@ -27,15 +29,13 @@ export default function Users() {
         try {
             await api.post("/auth/register", form);
             toast.success("User created"); setOpen(false); load();
-            setForm({ email: "", name: "", password: "", role: "staff" });
+            setForm(EMPTY);
         } catch (e) { toast.error(apiError(e)); }
     };
 
     const toggleActive = async (u) => {
-        try {
-            await api.patch(`/users/${u.id}`, { is_active: !u.is_active });
-            load();
-        } catch (e) { toast.error(apiError(e)); }
+        try { await api.patch(`/users/${u.id}`, { is_active: !u.is_active }); load(); }
+        catch (e) { toast.error(apiError(e)); }
     };
 
     return (
@@ -49,6 +49,7 @@ export default function Users() {
                 <table className="w-full text-sm">
                     <thead className="bg-muted/50">
                         <tr>
+                            <th className="px-4 py-3 text-left label-uppercase">Username</th>
                             <th className="px-4 py-3 text-left label-uppercase">Name</th>
                             <th className="px-4 py-3 text-left label-uppercase">Email</th>
                             <th className="px-4 py-3 text-left label-uppercase">Role</th>
@@ -58,9 +59,10 @@ export default function Users() {
                     </thead>
                     <tbody>
                         {users.map((u) => (
-                            <tr key={u.id} className="border-t border-border" data-testid={`user-row-${u.email}`}>
+                            <tr key={u.id} className="border-t border-border" data-testid={`user-row-${u.username || u.email}`}>
+                                <td className="px-4 py-3 font-mono text-xs">{u.username || "—"}</td>
                                 <td className="px-4 py-3 font-medium">{u.name}</td>
-                                <td className="px-4 py-3">{u.email}</td>
+                                <td className="px-4 py-3 text-muted-foreground">{u.email || "—"}</td>
                                 <td className="px-4 py-3 uppercase text-xs tracking-wider">{u.role}</td>
                                 <td className="px-4 py-3"><Switch checked={u.is_active} onCheckedChange={() => toggleActive(u)} /></td>
                                 <td className="px-4 py-3 text-muted-foreground">{(u.created_at || "").slice(0, 10)}</td>
@@ -74,9 +76,14 @@ export default function Users() {
                 <DialogContent>
                     <DialogHeader><DialogTitle>Create User</DialogTitle></DialogHeader>
                     <form onSubmit={create} className="space-y-4">
-                        <div><Label className="label-uppercase">Name</Label><Input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="user-name-input" /></div>
-                        <div><Label className="label-uppercase">Email</Label><Input type="email" required value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} data-testid="user-email-input" /></div>
-                        <div><Label className="label-uppercase">Password</Label><Input type="password" required value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} data-testid="user-password-input" /></div>
+                        <div><Label className="label-uppercase">Username *</Label>
+                            <Input required value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value.toLowerCase().trim() })} data-testid="user-username-input" placeholder="lowercase, no spaces" /></div>
+                        <div><Label className="label-uppercase">Display Name *</Label>
+                            <Input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} data-testid="user-name-input" /></div>
+                        <div><Label className="label-uppercase">Email (optional)</Label>
+                            <Input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} data-testid="user-email-input" /></div>
+                        <div><Label className="label-uppercase">Password *</Label>
+                            <Input type="password" required value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} data-testid="user-password-input" /></div>
                         <div>
                             <Label className="label-uppercase">Role</Label>
                             <Select value={form.role} onValueChange={(v) => setForm({ ...form, role: v })}>

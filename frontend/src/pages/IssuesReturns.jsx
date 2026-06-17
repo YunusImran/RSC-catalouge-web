@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import { api } from "../lib/api";
 import { Card } from "../components/ui/card";
@@ -12,10 +12,12 @@ import { useAuth, can } from "../lib/auth";
 
 export default function IssuesReturns() {
     const navigate = useNavigate();
+    const location = useLocation();
     const { user } = useAuth();
     const [issues, setIssues] = useState([]);
     const [returns, setReturns] = useState([]);
-    const [filter, setFilter] = useState("active");
+    const initial = new URLSearchParams(location.search).get("filter") || "active";
+    const [filter, setFilter] = useState(initial);
     const canReturn = can(user, "admin", "supervisor");
 
     const loadIssues = useCallback(() => {
@@ -28,6 +30,14 @@ export default function IssuesReturns() {
         if (!canReturn) return;
         api.get("/returns").then(({ data }) => setReturns(data));
     }, [canReturn]);
+
+    // Sync filter -> URL
+    useEffect(() => {
+        const u = new URL(window.location);
+        if (filter && filter !== "active") u.searchParams.set("filter", filter);
+        else u.searchParams.delete("filter");
+        window.history.replaceState({}, "", u);
+    }, [filter]);
 
     return (
         <div>
@@ -55,8 +65,9 @@ export default function IssuesReturns() {
                         <table className="w-full text-sm">
                             <thead className="bg-muted/50">
                                 <tr>
-                                    <th className="px-4 py-3 text-left label-uppercase">Code</th>
+                                    <th className="px-4 py-3 text-left label-uppercase">Txn ID</th>
                                     <th className="px-4 py-3 text-left label-uppercase">Catalog</th>
+                                    <th className="px-4 py-3 text-left label-uppercase">Supplier</th>
                                     <th className="px-4 py-3 text-left label-uppercase">Customer</th>
                                     <th className="px-4 py-3 text-left label-uppercase">Employee</th>
                                     <th className="px-4 py-3 text-left label-uppercase">Mobile</th>
@@ -67,11 +78,15 @@ export default function IssuesReturns() {
                                 </tr>
                             </thead>
                             <tbody>
-                                {issues.length === 0 && <tr><td colSpan={9} className="px-4 py-10 text-center text-muted-foreground">No issues found.</td></tr>}
+                                {issues.length === 0 && <tr><td colSpan={10} className="px-4 py-10 text-center text-muted-foreground">No issues found.</td></tr>}
                                 {issues.map((i) => (
                                     <tr key={i.id} className={`border-t border-border ${i.is_overdue ? "bg-accent/10" : ""}`} data-testid={`issue-row-${i.id}`}>
-                                        <td className="px-4 py-3 font-mono text-xs">{i.catalog_code || "—"}</td>
-                                        <td className="px-4 py-3 font-medium">{i.catalog_name || "—"}</td>
+                                        <td className="px-4 py-3 font-mono text-xs font-bold">{i.transaction_id || "—"}</td>
+                                        <td className="px-4 py-3">
+                                            <div className="font-medium">{i.catalog_name || "—"}</div>
+                                            <div className="text-xs font-mono text-muted-foreground">{i.catalog_code || ""}</div>
+                                        </td>
+                                        <td className="px-4 py-3">{i.supplier_name || "—"}</td>
                                         <td className="px-4 py-3">{i.customer_name || "—"}</td>
                                         <td className="px-4 py-3">{i.employee_name || "—"}</td>
                                         <td className="px-4 py-3 font-mono text-xs">{i.mobile || "—"}</td>
@@ -80,7 +95,7 @@ export default function IssuesReturns() {
                                             {(i.expected_return_date || "").slice(0, 10) || "—"}
                                             {i.is_overdue && (
                                                 <span className="ml-2 inline-flex items-center gap-1 text-xs text-accent font-semibold">
-                                                    <AlertTriangle className="w-3 h-3" /> {i.overdue_days}d overdue
+                                                    <AlertTriangle className="w-3 h-3" /> {i.overdue_days}d
                                                 </span>
                                             )}
                                         </td>
@@ -100,7 +115,7 @@ export default function IssuesReturns() {
                             <table className="w-full text-sm">
                                 <thead className="bg-muted/50">
                                     <tr>
-                                        <th className="px-4 py-3 text-left label-uppercase">Code</th>
+                                        <th className="px-4 py-3 text-left label-uppercase">Txn ID</th>
                                         <th className="px-4 py-3 text-left label-uppercase">Catalog</th>
                                         <th className="px-4 py-3 text-left label-uppercase">Customer</th>
                                         <th className="px-4 py-3 text-left label-uppercase">Mobile</th>
@@ -115,8 +130,11 @@ export default function IssuesReturns() {
                                     {returns.length === 0 && <tr><td colSpan={9} className="px-4 py-10 text-center text-muted-foreground">No returns yet.</td></tr>}
                                     {returns.map((r) => (
                                         <tr key={r.id} className="border-t border-border" data-testid={`return-row-${r.id}`}>
-                                            <td className="px-4 py-3 font-mono text-xs">{r.catalog_code || "—"}</td>
-                                            <td className="px-4 py-3 font-medium">{r.catalog_name || "—"}</td>
+                                            <td className="px-4 py-3 font-mono text-xs font-bold">{r.transaction_id || "—"}</td>
+                                            <td className="px-4 py-3">
+                                                <div className="font-medium">{r.catalog_name || "—"}</div>
+                                                <div className="text-xs font-mono text-muted-foreground">{r.catalog_code || ""}</div>
+                                            </td>
                                             <td className="px-4 py-3">{r.customer_name || "—"}</td>
                                             <td className="px-4 py-3 font-mono text-xs">{r.mobile || "—"}</td>
                                             <td className="px-4 py-3">{r.returned_by || "—"}</td>

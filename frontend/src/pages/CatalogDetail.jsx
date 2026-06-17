@@ -29,6 +29,14 @@ export default function CatalogDetail() {
     const reload = async () => {
         try {
             const { data } = await api.get(`/catalogs/${id}`);
+            // enrich with supplier name client-side
+            if (data.supplier_id) {
+                try {
+                    const sups = await api.get(`/suppliers`);
+                    const sup = sups.data.find((s) => s.id === data.supplier_id);
+                    data.supplier_name = sup ? sup.name : "";
+                } catch (_) {}
+            }
             setCatalog(data);
             const h = await api.get(`/catalogs/${id}/history`);
             setHistory(h.data);
@@ -95,6 +103,10 @@ export default function CatalogDetail() {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <Card className="lg:col-span-2 p-6 surface-card rounded-sm">
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-4">
+                        <Field label="Cat No" value={catalog.cat_no} mono />
+                        <Field label="Quantity" value={catalog.quantity} />
+                        <Field label="Supplier" value={catalog.supplier_name} />
+                        <Field label="Receiving Date" value={(catalog.receiving_date || "").slice(0, 10)} />
                         <Field label="Fabric Type" value={catalog.fabric_type} />
                         <Field label="GSM" value={catalog.gsm} />
                         <Field label="Color" value={catalog.color} />

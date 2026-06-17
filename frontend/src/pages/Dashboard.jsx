@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import { api } from "../lib/api";
 import StatusBadge from "../components/StatusBadge";
@@ -11,8 +12,12 @@ import {
 
 const PIE_COLORS = ["hsl(var(--chart-1))", "hsl(var(--chart-2))", "hsl(var(--chart-3))", "hsl(var(--chart-4))", "hsl(var(--chart-5))"];
 
-const Metric = ({ label, value, icon: Icon, accent, testId }) => (
-    <Card className="p-6 border surface-card rounded-sm stagger-in" data-testid={testId}>
+const Metric = ({ label, value, icon: Icon, accent, testId, onClick }) => (
+    <Card
+        className={`p-6 border surface-card rounded-sm stagger-in ${onClick ? "cursor-pointer hover:border-primary transition-colors" : ""}`}
+        data-testid={testId}
+        onClick={onClick}
+    >
         <div className="flex items-start justify-between">
             <div className="label-uppercase">{label}</div>
             <Icon className={`w-5 h-5 ${accent || "text-muted-foreground"}`} />
@@ -22,6 +27,7 @@ const Metric = ({ label, value, icon: Icon, accent, testId }) => (
 );
 
 export default function Dashboard() {
+    const navigate = useNavigate();
     const [stats, setStats] = useState(null);
     const [charts, setCharts] = useState(null);
 
@@ -37,13 +43,18 @@ export default function Dashboard() {
         <div>
             <PageHeader title="Operations Overview" subtitle="Dashboard" />
 
-            {/* Lifecycle widgets row */}
+            {/* Lifecycle widgets row - click to open filtered Issues list */}
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-4 mb-4">
-                <Metric label="Total Issued" value={t.issued} icon={ArrowUpRight} accent="text-primary" testId="stat-total-issued" />
-                <Metric label="Due Today" value={t.due_today} icon={CalendarClock} accent="text-[hsl(var(--warning))]" testId="stat-due-today" />
-                <Metric label="Due This Week" value={t.due_week} icon={CalendarDays} accent="text-chart-5" testId="stat-due-week" />
-                <Metric label="Overdue" value={t.overdue} icon={AlertTriangle} accent="text-accent" testId="stat-overdue" />
-                <Metric label="Returned" value={t.returned} icon={PackageOpen} accent="text-chart-5" testId="stat-returned" />
+                <Metric label="Total Issued" value={t.issued} icon={ArrowUpRight} accent="text-primary" testId="stat-total-issued"
+                        onClick={() => navigate("/issues-returns?filter=active")} />
+                <Metric label="Due Today" value={t.due_today} icon={CalendarClock} accent="text-[hsl(var(--warning))]" testId="stat-due-today"
+                        onClick={() => navigate("/issues-returns?filter=due_today")} />
+                <Metric label="Due This Week" value={t.due_week} icon={CalendarDays} accent="text-chart-5" testId="stat-due-week"
+                        onClick={() => navigate("/issues-returns?filter=due_week")} />
+                <Metric label="Overdue" value={t.overdue} icon={AlertTriangle} accent="text-accent" testId="stat-overdue"
+                        onClick={() => navigate("/issues-returns?filter=overdue")} />
+                <Metric label="Returned" value={t.returned} icon={PackageOpen} accent="text-chart-5" testId="stat-returned"
+                        onClick={() => navigate("/issues-returns")} />
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-4 gap-4 mb-8">
