@@ -36,10 +36,11 @@ user roles, reports, audit logs, and a dashboard. Archive instead of delete phil
 9. Users (admin only) — create, toggle active
 10. Auth: login, logout, change password, forgot/reset password, brute-force lockout (email keyed)
 
-## 2026-02-19 — Scanner tablet + USB hardware support
+## 2026-02-19 — Scanner tablet + USB hardware support + multi-field lookup
 - **P0 fix — tablet camera decoding**: `Scanner.jsx` upgraded with multi-format support (12 formats incl. CODE_128, CODE_39, EAN_13, DATA_MATRIX, QR), `useBarCodeDetectorIfSupported=true` (routes to native iPad/Android Chrome BarcodeDetector — orders of magnitude faster than ZXing-WASM), 15fps, dynamic rectangular qrbox, 1920×1080 ideal video with continuous autofocus.
-- **P1 feature — USB plug-and-play scanner**: global window `keydown` listener buffers rapid keystrokes (<60ms apart) and dispatches scan on Enter — works without needing to click into the input. Visible "USB scanner LISTENING" badge + Enable/Disable toggle. Correctly ignores typing inside other inputs/textareas.
-- Verified: 10/10 frontend test scenarios PASS (no double-fire, listener cleanup OK, toggle works, manual input still functions, graceful error when no camera).
+- **P1 feature — USB plug-and-play scanner**: global window `keydown` listener buffers rapid keystrokes (<60ms apart) and dispatches scan on Enter — works without needing to click into the input. Visible "USB scanner LISTENING" badge + Enable/Disable toggle. Correctly ignores typing inside other inputs/textareas. Auto-paused while picker dialog is open.
+- **P1 feature — Lookup by cat no / catalog name (in addition to code)**: `/api/scans` extended to a 3-tier lookup (exact codes → catalog_name exact case-insensitive → fuzzy contains on name/cat_no). Multi-match returns HTTP 409 with `{matches: [...]}`; frontend shows a Dialog picker (`multi-match-dialog`) so the user can disambiguate. Single-match flows are unchanged.
+- Verified: iteration_5 (USB + camera) 10/10 PASS, iteration_6 (cat_no/name + picker) 9/9 PASS.
 - Note: Real tablet decoding must be smoke-tested by the user against an actual fabric label — headless Chromium has no real BarcodeDetector or camera.
 
 ## What's been implemented (2026-02-11)

@@ -151,6 +151,7 @@ export default function Scanner() {
     // the global stream so the user doesn't have to click into the input first.
     useEffect(() => {
         if (!usbHotkeyOn) return;
+        if (multiMatch) return; // pause global capture while the picker dialog is open
         const INTER_CHAR_MS = 60;   // any pause longer than this resets the buffer
         const MIN_LEN = 3;          // ignore stray Enter presses
 
@@ -200,7 +201,7 @@ export default function Scanner() {
 
         window.addEventListener("keydown", onKeyDown);
         return () => window.removeEventListener("keydown", onKeyDown);
-    }, [usbHotkeyOn]);
+    }, [usbHotkeyOn, multiMatch]);
 
     const submitBatch = async (e) => {
         e.preventDefault();
