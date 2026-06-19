@@ -995,17 +995,76 @@ async def create_return(body: ReturnIn, request: Request, user=Depends(require_r
 # ---------------------------------------------------------------------------
 # Scans
 # ---------------------------------------------------------------------------
+def _escape_regex(s: str) -> str:
+    return re.sub(r"([.*+?^${}()|\[\]\\])", r"\\\1", s)
+
 @api.post("/scans")
 async def scan_barcode(body: ScanIn, request: Request, user=Depends(get_current_user)):
     code = body.barcode_value.strip()
-    # try barcode (catalog_code), then qr_value
-    cat = await db.catalogs.find_one({"$or": [
+    if not code:
+        raise HTTPException(400, "Empty lookup value")
+
+    # 1) Exact match across all identifier fields (barcode / catalog code / QR / cat no)
+    exact_or = [
         {"barcode_value": code},
         {"catalog_code": code},
         {"qr_value": code},
-    ]})
+        {"cat_no": code},
+    ]
+    cat = await db.catalogs.find_one({"$or": exact_or})
+
+    # 2) Case-insensitive exact match on catalog_name (single result only)
     if not cat:
-        raise HTTPException(404, "No catalog matched this code or QR")
+        pattern = f"^{_escape_regex(code)}$"
+        name_matches = await db.catalogs.find(
+            {"catalog_name": {"$regex": pattern, "$options": "i"}}
+        ).limit(6).to_list(6)
+        if len(name_matches) == 1:
+            cat = name_matches[0]
+        elif len(name_matches) > 1:
+            raise HTTPException(409, {
+                "message": f"{len(name_matches)} catalogs match '{code}' — pick one",
+                "matches": [
+                    {
+                        "id": str(m["_id"]),
+                        "catalog_code": m.get("catalog_code", ""),
+                        "catalog_name": m.get("catalog_name", ""),
+                        "cat_no": m.get("cat_no", ""),
+                        "status": m.get("status", ""),
+                    }
+                    for m in name_matches
+                ],
+            })
+
+    # 3) Fuzzy "contains" fallback on catalog_name / cat_no (only if value is long enough)
+    if not cat and len(code) >= 3:
+        pattern = _escape_regex(code)
+        fuzzy = await db.catalogs.find({
+            "$or": [
+                {"catalog_name": {"$regex": pattern, "$options": "i"}},
+                {"cat_no": {"$regex": pattern, "$options": "i"}},
+            ],
+            "archived": {"$ne": True},
+        }).limit(8).to_list(8)
+        if len(fuzzy) == 1:
+            cat = fuzzy[0]
+        elif len(fuzzy) > 1:
+            raise HTTPException(409, {
+                "message": f"{len(fuzzy)} catalogs match '{code}' — pick one",
+                "matches": [
+                    {
+                        "id": str(m["_id"]),
+                        "catalog_code": m.get("catalog_code", ""),
+                        "catalog_name": m.get("catalog_name", ""),
+                        "cat_no": m.get("cat_no", ""),
+                        "status": m.get("status", ""),
+                    }
+                    for m in fuzzy
+                ],
+            })
+
+    if not cat:
+        raise HTTPException(404, f"No catalog matched '{code}' (tried barcode, catalog code, QR, cat no, name)")
     doc = {
         "catalog_id": str(cat["_id"]),
         "user_id": user["id"], "user_email": user["email"],

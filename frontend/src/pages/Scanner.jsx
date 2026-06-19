@@ -8,6 +8,7 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Textarea } from "../components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../components/ui/dialog";
 import { toast } from "sonner";
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 import { ScanLine, Camera, StopCircle, AlertTriangle, X, Send, Trash2, Keyboard } from "lucide-react";
@@ -43,6 +44,7 @@ export default function Scanner() {
     const usbBufferRef = useRef({ chars: "", lastTs: 0 });
     const [usbHotkeyOn, setUsbHotkeyOn] = useState(true);
     const [usbLastScan, setUsbLastScan] = useState(""); // small visual confirmation
+    const [multiMatch, setMultiMatch] = useState(null); // { value, matches: [] } when backend returns 409
 
     // BATCH ISSUE state
     const [employees, setEmployees] = useState([]);
@@ -71,6 +73,18 @@ export default function Scanner() {
         } catch (e) { return null; }
     };
 
+    // Detect a 409 multi-match response and surface a picker.
+    // Returns true if it was handled (i.e. picker shown), false otherwise.
+    const handleMultiMatch = (err, value) => {
+        const status = err?.response?.status;
+        const detail = err?.response?.data?.detail;
+        if (status === 409 && detail && Array.isArray(detail.matches)) {
+            setMultiMatch({ value, matches: detail.matches });
+            return true;
+        }
+        return false;
+    };
+
     const addToBasket = async (value) => {
         if (!value) return;
         if (action === "Search" || action === "View") {
@@ -79,7 +93,9 @@ export default function Scanner() {
                 const { data } = await api.post("/scans", { barcode_value: value, action, device_type: cameraOn ? "Camera" : "USB/Manual" });
                 toast.success(`Found: ${data.catalog.catalog_name}`);
                 navigate(`/catalogs/${data.catalog.id}`);
-            } catch (e) { toast.error(apiError(e)); }
+            } catch (e) {
+                if (!handleMultiMatch(e, value)) toast.error(apiError(e));
+            }
             return;
         }
         if (action === "Issue Single") {
@@ -93,7 +109,9 @@ export default function Scanner() {
                 }
                 toast.success(`Opening ${cat.catalog_name} — click Issue`);
                 navigate(`/catalogs/${cat.id}`);
-            } catch (e) { toast.error(apiError(e)); }
+            } catch (e) {
+                if (!handleMultiMatch(e, value)) toast.error(apiError(e));
+            }
             return;
         }
         // Issue Batch — add to basket
@@ -110,7 +128,15 @@ export default function Scanner() {
             }
             setBasket((b) => [...b, { id: cat.id, catalog_code: cat.catalog_code, catalog_name: cat.catalog_name, cat_no: cat.cat_no || "" }]);
             toast.success(`+ ${cat.catalog_name}`);
-        } catch (e) { toast.error(apiError(e)); }
+        } catch (e) {
+            if (!handleMultiMatch(e, value)) toast.error(apiError(e));
+        }
+    };
+
+    // When the user picks one of the multi-match candidates, retry with the exact catalog_code.
+    const pickMatch = async (m) => {
+        setMultiMatch(null);
+        await addToBasket(m.catalog_code);
     };
 
     const removeFromBasket = (id) => setBasket((b) => b.filter((x) => x.id !== id));
@@ -338,13 +364,13 @@ export default function Scanner() {
                         </Button>
                     </div>
                     <p className="text-sm text-muted-foreground mb-4">
-                        Plug in a USB barcode scanner — just scan, no clicking required. Or use the camera below for tablet/phone use.
+                        Plug in a USB barcode scanner — just scan, no clicking required. Or type a <b>code</b>, <b>cat no</b>, or <b>catalog name</b> below.
                     </p>
                     <form onSubmit={onManualSubmit} className="space-y-4">
                         <div>
-                            <Label className="label-uppercase">Barcode / Catalog Code</Label>
+                            <Label className="label-uppercase">Barcode / Catalog Code / Cat No / Name</Label>
                             <Input ref={inputRef} autoFocus value={code} onChange={(e) => setCode(e.target.value)}
-                                placeholder="Scan or type code…" className="font-mono text-lg"
+                                placeholder="Scan or type code, cat no, or name…" className="font-mono text-lg"
                                 data-testid="scanner-input" />
                         </div>
                         <div>
@@ -505,6 +531,45 @@ export default function Scanner() {
                     </Card>
                 )}
             </div>
+
+            {/* Multi-match picker — shown when the lookup string matches several catalogs by name / cat no */}
+            <Dialog open={!!multiMatch} onOpenChange={(open) => { if (!open) setMultiMatch(null); }}>
+                <DialogContent className="max-w-lg" data-testid="multi-match-dialog">
+                    <DialogHeader>
+                        <DialogTitle>Pick a catalog</DialogTitle>
+                        <DialogDescription>
+                            {multiMatch?.matches?.length || 0} catalogs match{" "}
+                            <span className="font-mono text-foreground">&ldquo;{multiMatch?.value}&rdquo;</span>.
+                            Select one to continue.
+                        </DialogDescription>
+                    </DialogHeader>
+                    <div className="max-h-80 overflow-y-auto -mx-2 px-2 space-y-1.5">
+                        {(multiMatch?.matches || []).map((m) => (
+                            <button
+                                key={m.id}
+                                type="button"
+                                onClick={() => pickMatch(m)}
+                                data-testid={`match-pick-${m.catalog_code}`}
+                                className="w-full text-left px-3 py-2.5 rounded-sm border border-border hover:bg-accent/10 hover:border-accent transition-colors"
+                            >
+                                <div className="flex items-center justify-between gap-2">
+                                    <div className="min-w-0">
+                                        <div className="font-medium truncate">{m.catalog_name}</div>
+                                        <div className="font-mono text-[11px] text-muted-foreground">
+                                            {m.catalog_code}{m.cat_no ? ` · ${m.cat_no}` : ""}
+                                        </div>
+                                    </div>
+                                    {m.status && (
+                                        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded-sm ${m.status === "Issued" ? "bg-amber-500/15 text-amber-700 dark:text-amber-400" : "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"}`}>
+                                            {m.status}
+                                        </span>
+                                    )}
+                                </div>
+                            </button>
+                        ))}
+                    </div>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }
