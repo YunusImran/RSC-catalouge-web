@@ -9,8 +9,24 @@ import { Label } from "../components/ui/label";
 import { Textarea } from "../components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { toast } from "sonner";
-import { Html5Qrcode } from "html5-qrcode";
-import { ScanLine, Camera, StopCircle, AlertTriangle, X, Send, Trash2 } from "lucide-react";
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
+import { ScanLine, Camera, StopCircle, AlertTriangle, X, Send, Trash2, Keyboard } from "lucide-react";
+
+// Formats commonly printed on fabric / catalog labels.
+const SUPPORTED_FORMATS = [
+    Html5QrcodeSupportedFormats.QR_CODE,
+    Html5QrcodeSupportedFormats.CODE_128,
+    Html5QrcodeSupportedFormats.CODE_39,
+    Html5QrcodeSupportedFormats.CODE_93,
+    Html5QrcodeSupportedFormats.EAN_13,
+    Html5QrcodeSupportedFormats.EAN_8,
+    Html5QrcodeSupportedFormats.UPC_A,
+    Html5QrcodeSupportedFormats.UPC_E,
+    Html5QrcodeSupportedFormats.ITF,
+    Html5QrcodeSupportedFormats.CODABAR,
+    Html5QrcodeSupportedFormats.DATA_MATRIX,
+    Html5QrcodeSupportedFormats.PDF_417,
+];
 
 const MOBILE_RE = /^[+]?[0-9\-\s()]{7,20}$/;
 
@@ -24,6 +40,9 @@ export default function Scanner() {
     const [selectedCameraId, setSelectedCameraId] = useState("");
     const scannerRef = useRef(null);
     const inputRef = useRef(null);
+    const usbBufferRef = useRef({ chars: "", lastTs: 0 });
+    const [usbHotkeyOn, setUsbHotkeyOn] = useState(true);
+    const [usbLastScan, setUsbLastScan] = useState(""); // small visual confirmation
 
     // BATCH ISSUE state
     const [employees, setEmployees] = useState([]);
@@ -97,6 +116,66 @@ export default function Scanner() {
     const removeFromBasket = (id) => setBasket((b) => b.filter((x) => x.id !== id));
     const clearBasket = () => setBasket([]);
 
+    // Keep latest addToBasket in a ref so the global key listener registers once.
+    const addToBasketRef = useRef(addToBasket);
+    useEffect(() => { addToBasketRef.current = addToBasket; });
+
+    // ---------- USB / Bluetooth barcode scanner (keyboard-emulating) ----------
+    // USB scanners type fast (<35ms between chars) and end with Enter. We capture
+    // the global stream so the user doesn't have to click into the input first.
+    useEffect(() => {
+        if (!usbHotkeyOn) return;
+        const INTER_CHAR_MS = 60;   // any pause longer than this resets the buffer
+        const MIN_LEN = 3;          // ignore stray Enter presses
+
+        const isTypingTarget = (el) => {
+            if (!el) return false;
+            const tag = el.tagName;
+            if (tag === "TEXTAREA") return true;
+            if (tag === "INPUT") {
+                // Allow the dedicated scanner input — its own form handles Enter.
+                if (el.dataset && el.dataset.testid === "scanner-input") return false;
+                const t = (el.type || "text").toLowerCase();
+                return ["text", "search", "tel", "url", "email", "password", "number", "date"].includes(t);
+            }
+            return el.isContentEditable === true;
+        };
+
+        const onKeyDown = (e) => {
+            // Ignore modifier combos and non-character navigation keys (except Enter).
+            if (e.ctrlKey || e.metaKey || e.altKey) return;
+            if (isTypingTarget(e.target)) return;
+
+            const now = Date.now();
+            const buf = usbBufferRef.current;
+
+            if (e.key === "Enter") {
+                if (buf.chars.length >= MIN_LEN && (now - buf.lastTs) < 500) {
+                    const value = buf.chars;
+                    usbBufferRef.current = { chars: "", lastTs: 0 };
+                    setUsbLastScan(value);
+                    setTimeout(() => setUsbLastScan(""), 1500);
+                    addToBasketRef.current?.(value);
+                    e.preventDefault();
+                } else {
+                    usbBufferRef.current = { chars: "", lastTs: 0 };
+                }
+                return;
+            }
+
+            // Only accept printable single characters.
+            if (e.key.length !== 1) return;
+
+            // If too slow → start fresh (treat as new scan).
+            if (now - buf.lastTs > INTER_CHAR_MS) buf.chars = "";
+            buf.chars += e.key;
+            buf.lastTs = now;
+        };
+
+        window.addEventListener("keydown", onKeyDown);
+        return () => window.removeEventListener("keydown", onKeyDown);
+    }, [usbHotkeyOn]);
+
     const submitBatch = async (e) => {
         e.preventDefault();
         if (basket.length === 0) { toast.error("Basket is empty"); return; }
@@ -144,12 +223,38 @@ export default function Scanner() {
         }
         const list = await probeCameras();
         try {
-            const html5 = new Html5Qrcode("camera-region", { verbose: false });
+            const html5 = new Html5Qrcode("camera-region", {
+                verbose: false,
+                formatsToSupport: SUPPORTED_FORMATS,
+                useBarCodeDetectorIfSupported: true, // Native fast decoder on iPad/Android Chrome
+            });
             scannerRef.current = html5;
             const camConfig = selectedCameraId || (list && list[0]?.id) || { facingMode: { ideal: "environment" } };
+
+            // Rectangular qrbox sized to viewport — wider for 1D barcodes, dynamic for tablets.
+            const qrboxFn = (viewW, viewH) => {
+                const minEdge = Math.min(viewW, viewH);
+                const boxW = Math.floor(Math.min(viewW * 0.85, 480));
+                const boxH = Math.floor(Math.min(minEdge * 0.55, 280));
+                return { width: boxW, height: boxH };
+            };
+
             await html5.start(
                 camConfig,
-                { fps: 10, qrbox: { width: 250, height: 250 } },
+                {
+                    fps: 15,
+                    qrbox: qrboxFn,
+                    aspectRatio: 1.7777778,
+                    disableFlip: false,
+                    videoConstraints: {
+                        facingMode: { ideal: "environment" },
+                        width: { ideal: 1920, min: 1280 },
+                        height: { ideal: 1080, min: 720 },
+                        focusMode: "continuous",
+                        advanced: [{ focusMode: "continuous" }, { zoom: 1.5 }],
+                    },
+                    experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+                },
                 (decoded) => {
                     addToBasket(decoded);
                     // Keep camera on for Issue Batch (scan many); stop for others
@@ -158,6 +263,18 @@ export default function Scanner() {
                 () => {}
             );
             setCameraOn(true);
+
+            // Apply continuous autofocus / torch hints once the track is live (best-effort).
+            try {
+                const videoEl = document.querySelector("#camera-region video");
+                const track = videoEl?.srcObject?.getVideoTracks?.()[0];
+                const caps = track?.getCapabilities?.() || {};
+                const constraints = [];
+                if (caps.focusMode && caps.focusMode.includes("continuous")) {
+                    constraints.push({ focusMode: "continuous" });
+                }
+                if (constraints.length) await track.applyConstraints({ advanced: constraints });
+            } catch (_) { /* ignore — best effort only */ }
         } catch (e) {
             const msg = `Cannot start camera: ${e?.message || e}`;
             setCameraError(msg); toast.error(msg);
@@ -201,8 +318,27 @@ export default function Scanner() {
                         <ScanLine className="w-6 h-6 text-accent" />
                         <h3 className="font-display font-bold text-xl">USB Scanner / Manual</h3>
                     </div>
+                    <div className="flex items-center justify-between gap-3 mb-4 p-2 px-3 rounded-sm bg-muted/40 border border-border">
+                        <div className="flex items-center gap-2 text-xs">
+                            <Keyboard className={`w-4 h-4 ${usbHotkeyOn ? "text-accent" : "text-muted-foreground"}`} />
+                            <span className="font-medium">USB scanner</span>
+                            <span className={`px-1.5 py-0.5 rounded-sm text-[10px] font-mono ${usbHotkeyOn ? "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400" : "bg-muted text-muted-foreground"}`} data-testid="usb-status">
+                                {usbHotkeyOn ? "LISTENING" : "OFF"}
+                            </span>
+                            {usbLastScan && (
+                                <span className="font-mono text-[10px] text-accent animate-pulse" data-testid="usb-last-scan">
+                                    ↳ {usbLastScan}
+                                </span>
+                            )}
+                        </div>
+                        <Button type="button" size="sm" variant={usbHotkeyOn ? "secondary" : "outline"}
+                                onClick={() => setUsbHotkeyOn((v) => !v)}
+                                data-testid="usb-toggle-btn">
+                            {usbHotkeyOn ? "Disable" : "Enable"}
+                        </Button>
+                    </div>
                     <p className="text-sm text-muted-foreground mb-4">
-                        Set the action below. <b>Issue</b> mode lets you scan multiple barcodes one after another — they all share the same transaction ID when issued to the same customer.
+                        Plug in a USB barcode scanner — just scan, no clicking required. Or use the camera below for tablet/phone use.
                     </p>
                     <form onSubmit={onManualSubmit} className="space-y-4">
                         <div>
