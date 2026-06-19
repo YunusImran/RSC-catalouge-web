@@ -35,7 +35,7 @@ function Shell() {
             <Route path="/login" element={<Login />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
 
-            <Route path="/" element={<Protected><Dashboard /></Protected>} />
+            <Route path="/" element={<Navigate to="/login" replace />} />
             <Route path="/dashboard" element={<Protected><Dashboard /></Protected>} />
             <Route path="/catalogs" element={<Protected><Catalogs /></Protected>} />
             <Route path="/catalogs/:id" element={<Protected><CatalogDetail /></Protected>} />
