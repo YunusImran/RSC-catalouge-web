@@ -104,7 +104,7 @@ async def main():
             "description": "",
             "catalog_image": "",
             "swatch_images": [],
-            "qr_value": "",
+            "qr_value": code,
             "buying_price": None, "selling_price": None,
             "remarks": s(remarks),
             "receiving_date": recv_iso,
