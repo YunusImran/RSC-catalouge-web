@@ -36,6 +36,12 @@ user roles, reports, audit logs, and a dashboard. Archive instead of delete phil
 9. Users (admin only) — create, toggle active
 10. Auth: login, logout, change password, forgot/reset password, brute-force lockout (email keyed)
 
+## 2026-02-19 — Scanner tablet + USB hardware support
+- **P0 fix — tablet camera decoding**: `Scanner.jsx` upgraded with multi-format support (12 formats incl. CODE_128, CODE_39, EAN_13, DATA_MATRIX, QR), `useBarCodeDetectorIfSupported=true` (routes to native iPad/Android Chrome BarcodeDetector — orders of magnitude faster than ZXing-WASM), 15fps, dynamic rectangular qrbox, 1920×1080 ideal video with continuous autofocus.
+- **P1 feature — USB plug-and-play scanner**: global window `keydown` listener buffers rapid keystrokes (<60ms apart) and dispatches scan on Enter — works without needing to click into the input. Visible "USB scanner LISTENING" badge + Enable/Disable toggle. Correctly ignores typing inside other inputs/textareas.
+- Verified: 10/10 frontend test scenarios PASS (no double-fire, listener cleanup OK, toggle works, manual input still functions, graceful error when no camera).
+- Note: Real tablet decoding must be smoke-tested by the user against an actual fabric label — headless Chromium has no real BarcodeDetector or camera.
+
 ## What's been implemented (2026-02-11)
 - Full backend with JWT cookie auth, RBAC, brute-force lockout (email-keyed), password reset
 - Dashboard stats + 4 charts (line, pie, two bars)
